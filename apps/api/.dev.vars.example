@@ -1,0 +1,8 @@
+# Backend local secrets — copy to .dev.vars and fill in real values.
+# .dev.vars is gitignored. Do NOT commit real credentials.
+
+# Neon database connection string
+DATABASE_URL=postgresql://user:password@host/db?sslmode=require
+
+# Auth secret (API key or JWT secret)
+AUTH_SECRET=dev-secret-change-me

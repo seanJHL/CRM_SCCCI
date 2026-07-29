@@ -1,0 +1,39 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "crm-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "vars": {
+    "ENVIRONMENT": "development",
+    "CORS_ORIGIN": "*"
+  },
+  "env": {
+    "preview": {
+      "name": "crm-api-preview",
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1
+      },
+      "vars": {
+        "ENVIRONMENT": "preview",
+        "CORS_ORIGIN": "https://preview.crm.seanleejh.com"
+      }
+    },
+    "production": {
+      "name": "crm-api",
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 0.1
+      },
+      "vars": {
+        "ENVIRONMENT": "production",
+        "CORS_ORIGIN": "https://crm.seanleejh.com"
+      }
+    }
+  }
+}
