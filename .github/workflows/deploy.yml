@@ -67,11 +67,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build Web (generates TanStack route tree before typecheck)
+        run: pnpm build:web
+
       - name: Typecheck Web
         run: pnpm --filter @crm/web typecheck
-
-      - name: Build Web
-        run: pnpm build:web
 
       - name: Ensure Pages project exists
         working-directory: apps/web
