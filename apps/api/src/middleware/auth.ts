@@ -13,7 +13,7 @@ import { getEnv } from "@/lib/env";
  *   app.use("/api/*", authMiddleware)
  */
 export const authMiddleware: MiddlewareHandler<AppBindings> = async (c, next) => {
-  const env = getEnv(c.env, { ENVIRONMENT: c.var.ENVIRONMENT, CORS_ORIGIN: c.var.CORS_ORIGIN });
+  const env = getEnv(c.env);
 
   // Skip auth for health checks
   if (c.req.path === "/api/health" || c.req.path === "/") {

@@ -6,12 +6,6 @@ export interface Bindings {
   DATABASE_URL: string;
   /** JWT or API key secret for auth (secret) */
   AUTH_SECRET: string;
-}
-
-/**
- * Non-secret variables defined in wrangler.jsonc under `vars`.
- */
-export interface Variables {
   /** Current deployment environment */
   ENVIRONMENT: string;
   /** Allowed CORS origin(s) */
@@ -19,8 +13,12 @@ export interface Variables {
 }
 
 /**
- * Hono context bindings — merges Worker bindings and route variables.
+ * Values attached to the Hono context by middleware.
  */
+export interface Variables {
+  requestId: string;
+}
+
 export type AppBindings = {
   Bindings: Bindings;
   Variables: Variables;

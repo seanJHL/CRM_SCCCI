@@ -23,7 +23,7 @@ const dealsRoute = new Hono<AppBindings>();
 
 // List all deals
 dealsRoute.get("/", async (c) => {
-  const env = getEnv(c.env, { ENVIRONMENT: c.var.ENVIRONMENT, CORS_ORIGIN: c.var.CORS_ORIGIN });
+  const env = getEnv(c.env);
   const db = createDatabase(env.databaseUrl);
   const rows = await db.select().from(deals).orderBy(deals.createdAt);
   return c.json(ok(rows));
@@ -31,7 +31,7 @@ dealsRoute.get("/", async (c) => {
 
 // Get a single deal
 dealsRoute.get("/:id", async (c) => {
-  const env = getEnv(c.env, { ENVIRONMENT: c.var.ENVIRONMENT, CORS_ORIGIN: c.var.CORS_ORIGIN });
+  const env = getEnv(c.env);
   const db = createDatabase(env.databaseUrl);
   const id = c.req.param("id");
   const [row] = await db.select().from(deals).where(eq(deals.id, id));
@@ -41,7 +41,7 @@ dealsRoute.get("/:id", async (c) => {
 
 // Create a deal
 dealsRoute.post("/", async (c) => {
-  const env = getEnv(c.env, { ENVIRONMENT: c.var.ENVIRONMENT, CORS_ORIGIN: c.var.CORS_ORIGIN });
+  const env = getEnv(c.env);
   const db = createDatabase(env.databaseUrl);
   const body = dealSchema.parse(await c.req.json());
   const [created] = await db
@@ -58,7 +58,7 @@ dealsRoute.post("/", async (c) => {
 
 // Update a deal
 dealsRoute.patch("/:id", async (c) => {
-  const env = getEnv(c.env, { ENVIRONMENT: c.var.ENVIRONMENT, CORS_ORIGIN: c.var.CORS_ORIGIN });
+  const env = getEnv(c.env);
   const db = createDatabase(env.databaseUrl);
   const id = c.req.param("id");
   const body = dealUpdateSchema.parse(await c.req.json());
@@ -79,7 +79,7 @@ dealsRoute.patch("/:id", async (c) => {
 
 // Delete a deal
 dealsRoute.delete("/:id", async (c) => {
-  const env = getEnv(c.env, { ENVIRONMENT: c.var.ENVIRONMENT, CORS_ORIGIN: c.var.CORS_ORIGIN });
+  const env = getEnv(c.env);
   const db = createDatabase(env.databaseUrl);
   const id = c.req.param("id");
   const [deleted] = await db.delete(deals).where(eq(deals.id, id)).returning();

@@ -24,7 +24,7 @@ const contactsRoute = new Hono<AppBindings>();
 
 // List all contacts
 contactsRoute.get("/", async (c) => {
-  const env = getEnv(c.env, { ENVIRONMENT: c.var.ENVIRONMENT, CORS_ORIGIN: c.var.CORS_ORIGIN });
+  const env = getEnv(c.env);
   const db = createDatabase(env.databaseUrl);
   const rows = await db.select().from(contacts).orderBy(contacts.createdAt);
   return c.json(ok(rows));
@@ -32,7 +32,7 @@ contactsRoute.get("/", async (c) => {
 
 // Get a single contact
 contactsRoute.get("/:id", async (c) => {
-  const env = getEnv(c.env, { ENVIRONMENT: c.var.ENVIRONMENT, CORS_ORIGIN: c.var.CORS_ORIGIN });
+  const env = getEnv(c.env);
   const db = createDatabase(env.databaseUrl);
   const id = c.req.param("id");
   const [row] = await db.select().from(contacts).where(eq(contacts.id, id));
@@ -42,7 +42,7 @@ contactsRoute.get("/:id", async (c) => {
 
 // Create a contact
 contactsRoute.post("/", async (c) => {
-  const env = getEnv(c.env, { ENVIRONMENT: c.var.ENVIRONMENT, CORS_ORIGIN: c.var.CORS_ORIGIN });
+  const env = getEnv(c.env);
   const db = createDatabase(env.databaseUrl);
   const body = contactSchema.parse(await c.req.json());
   const [created] = await db
@@ -60,7 +60,7 @@ contactsRoute.post("/", async (c) => {
 
 // Update a contact
 contactsRoute.patch("/:id", async (c) => {
-  const env = getEnv(c.env, { ENVIRONMENT: c.var.ENVIRONMENT, CORS_ORIGIN: c.var.CORS_ORIGIN });
+  const env = getEnv(c.env);
   const db = createDatabase(env.databaseUrl);
   const id = c.req.param("id");
   const body = contactUpdateSchema.parse(await c.req.json());
@@ -75,7 +75,7 @@ contactsRoute.patch("/:id", async (c) => {
 
 // Delete a contact
 contactsRoute.delete("/:id", async (c) => {
-  const env = getEnv(c.env, { ENVIRONMENT: c.var.ENVIRONMENT, CORS_ORIGIN: c.var.CORS_ORIGIN });
+  const env = getEnv(c.env);
   const db = createDatabase(env.databaseUrl);
   const id = c.req.param("id");
   const [deleted] = await db.delete(contacts).where(eq(contacts.id, id)).returning();

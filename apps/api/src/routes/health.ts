@@ -6,7 +6,7 @@ import { getEnv } from "@/lib/env";
 const health = new Hono<AppBindings>();
 
 health.get("/", (c) => {
-  const env = getEnv(c.env, { ENVIRONMENT: c.var.ENVIRONMENT, CORS_ORIGIN: c.var.CORS_ORIGIN });
+  const env = getEnv(c.env);
   return c.json(
     ok({
       status: "healthy",

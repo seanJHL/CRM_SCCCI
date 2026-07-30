@@ -9,8 +9,8 @@ import { getEnv } from "@/lib/env";
  */
 export const requestLogger: MiddlewareHandler<AppBindings> = async (c, next) => {
   const start = Date.now();
-  const env = getEnv(c.env, { ENVIRONMENT: c.var.ENVIRONMENT, CORS_ORIGIN: c.var.CORS_ORIGIN });
-  const requestId = c.req.header("x-request-id") ?? "-";
+  const env = getEnv(c.env);
+  const requestId = c.get("requestId");
 
   await next();
 

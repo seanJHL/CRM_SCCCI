@@ -11,7 +11,7 @@ import { getEnv } from "@/lib/env";
  */
 export function errorHandler() {
   return (err: Error, c: Context<AppBindings>) => {
-    const env = getEnv(c.env, { ENVIRONMENT: c.var.ENVIRONMENT, CORS_ORIGIN: c.var.CORS_ORIGIN });
+    const env = getEnv(c.env);
     const requestId = c.get("requestId") ?? "unknown";
 
     // Zod validation errors
@@ -89,7 +89,7 @@ export function errorHandler() {
 export const requestIdMiddleware: MiddlewareHandler<AppBindings> = async (c, next) => {
   const requestId =
     c.req.header("x-request-id") || crypto.randomUUID();
-  c.set("requestId" as never, requestId);
+  c.set("requestId", requestId);
   c.header("x-request-id", requestId);
   await next();
 };

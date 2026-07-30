@@ -1,13 +1,15 @@
+import type { ContentfulStatusCode } from "hono/utils/http-status";
+
 /**
  * Standard API error structure for consistent error responses.
  */
 export class ApiError extends Error {
-  readonly statusCode: number;
+  readonly statusCode: ContentfulStatusCode;
   readonly code: string;
   readonly details?: unknown;
 
   constructor(
-    statusCode: number,
+    statusCode: ContentfulStatusCode,
     code: string,
     message: string,
     details?: unknown,

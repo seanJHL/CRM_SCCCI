@@ -24,24 +24,19 @@ export function createApp() {
   app.use("*", requestLogger);
 
   // CORS — configured dynamically from the CORS_ORIGIN env var
-  app.use(
-    "*",
-    cors((c) => {
-      const env = getEnv(c.env, {
-        ENVIRONMENT: c.var.ENVIRONMENT,
-        CORS_ORIGIN: c.var.CORS_ORIGIN,
-      });
-      const origins = parseCorsOrigins(env.corsOrigin);
-      return {
-        origin: origins.includes("*") ? "*" : origins,
-        allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allowHeaders: ["Content-Type", "Authorization", "X-Request-ID"],
-        exposeHeaders: ["X-Request-ID"],
-        credentials: !origins.includes("*"),
-        maxAge: 86400,
-      };
-    }),
-  );
+  app.use("*", async (c, next) => {
+    const env = getEnv(c.env);
+    const origins = parseCorsOrigins(env.corsOrigin);
+    const corsMiddleware = cors({
+      origin: origins.includes("*") ? "*" : origins,
+      allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      allowHeaders: ["Content-Type", "Authorization", "X-Request-ID"],
+      exposeHeaders: ["X-Request-ID"],
+      credentials: !origins.includes("*"),
+      maxAge: 86400,
+    });
+    return corsMiddleware(c, next);
+  });
 
   // --- Routes ---
   app.route("/api", routes);

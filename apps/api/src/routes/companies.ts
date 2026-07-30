@@ -24,7 +24,7 @@ const companiesRoute = new Hono<AppBindings>();
 
 // List all companies
 companiesRoute.get("/", async (c) => {
-  const env = getEnv(c.env, { ENVIRONMENT: c.var.ENVIRONMENT, CORS_ORIGIN: c.var.CORS_ORIGIN });
+  const env = getEnv(c.env);
   const db = createDatabase(env.databaseUrl);
   const rows = await db.select().from(companies).orderBy(companies.createdAt);
   return c.json(ok(rows));
@@ -32,7 +32,7 @@ companiesRoute.get("/", async (c) => {
 
 // Get a single company
 companiesRoute.get("/:id", async (c) => {
-  const env = getEnv(c.env, { ENVIRONMENT: c.var.ENVIRONMENT, CORS_ORIGIN: c.var.CORS_ORIGIN });
+  const env = getEnv(c.env);
   const db = createDatabase(env.databaseUrl);
   const id = c.req.param("id");
   const [row] = await db.select().from(companies).where(eq(companies.id, id));
@@ -42,7 +42,7 @@ companiesRoute.get("/:id", async (c) => {
 
 // Create a company
 companiesRoute.post("/", async (c) => {
-  const env = getEnv(c.env, { ENVIRONMENT: c.var.ENVIRONMENT, CORS_ORIGIN: c.var.CORS_ORIGIN });
+  const env = getEnv(c.env);
   const db = createDatabase(env.databaseUrl);
   const body = companySchema.parse(await c.req.json());
   const [created] = await db
@@ -54,7 +54,7 @@ companiesRoute.post("/", async (c) => {
 
 // Update a company
 companiesRoute.patch("/:id", async (c) => {
-  const env = getEnv(c.env, { ENVIRONMENT: c.var.ENVIRONMENT, CORS_ORIGIN: c.var.CORS_ORIGIN });
+  const env = getEnv(c.env);
   const db = createDatabase(env.databaseUrl);
   const id = c.req.param("id");
   const body = companyUpdateSchema.parse(await c.req.json());
@@ -69,7 +69,7 @@ companiesRoute.patch("/:id", async (c) => {
 
 // Delete a company
 companiesRoute.delete("/:id", async (c) => {
-  const env = getEnv(c.env, { ENVIRONMENT: c.var.ENVIRONMENT, CORS_ORIGIN: c.var.CORS_ORIGIN });
+  const env = getEnv(c.env);
   const db = createDatabase(env.databaseUrl);
   const id = c.req.param("id");
   const [deleted] = await db.delete(companies).where(eq(companies.id, id)).returning();

@@ -14,6 +14,7 @@ build
 
 # tanstack start generated files
 apps/web/src/routeTree.gen.ts
+apps/web/app.config.timestamp_*.js
 
 # environment files with secrets
 .env
