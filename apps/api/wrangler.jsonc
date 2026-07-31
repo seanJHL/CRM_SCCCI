@@ -1,9 +1,12 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "crm-api",
+  "name": "ember-api",
   "main": "src/index.ts",
   "compatibility_date": "2025-06-01",
   "compatibility_flags": ["nodejs_compat"],
+  "triggers": {
+    "crons": ["0 0 * * *", "*/15 * * * *"]
+  },
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
@@ -14,7 +17,7 @@
   },
   "env": {
     "preview": {
-      "name": "crm-api-preview",
+      "name": "ember-api-preview",
       "observability": {
         "enabled": true,
         "head_sampling_rate": 1
@@ -25,7 +28,7 @@
       }
     },
     "production": {
-      "name": "crm-api",
+      "name": "ember-api",
       "observability": {
         "enabled": true,
         "head_sampling_rate": 0.1

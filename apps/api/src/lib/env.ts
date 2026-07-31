@@ -8,6 +8,9 @@ export interface EnvConfig {
   corsOrigin: string;
   databaseUrl: string;
   authSecret: string;
+  vapidPublicKey: string;
+  vapidPrivateKey: string;
+  vapidSubject: string;
   isProduction: boolean;
   isPreview: boolean;
 }
@@ -22,6 +25,9 @@ export function getEnv(bindings?: Partial<Bindings>): EnvConfig {
     corsOrigin: bindings?.CORS_ORIGIN ?? "*",
     databaseUrl: bindings?.DATABASE_URL ?? "",
     authSecret: bindings?.AUTH_SECRET ?? "",
+    vapidPublicKey: bindings?.VAPID_PUBLIC_KEY ?? "",
+    vapidPrivateKey: bindings?.VAPID_PRIVATE_KEY ?? "",
+    vapidSubject: bindings?.VAPID_SUBJECT ?? "mailto:push@ember.app",
     isProduction: environment === "production",
     isPreview: environment === "preview",
   };

@@ -1,0 +1,72 @@
+-- Seed exercise library with 60 exercises across 8 categories
+-- Uses ON CONFLICT to be idempotent (safe to re-run)
+
+INSERT INTO "exercises" ("id", "name", "category", "equipment_type") VALUES
+-- Chest (8)
+(gen_random_uuid(), 'Bench Press', 'chest', 'free_weight'),
+(gen_random_uuid(), 'Incline Bench Press', 'chest', 'free_weight'),
+(gen_random_uuid(), 'Dumbbell Fly', 'chest', 'free_weight'),
+(gen_random_uuid(), 'Cable Crossover', 'chest', 'machine'),
+(gen_random_uuid(), 'Chest Dip', 'chest', 'bodyweight'),
+(gen_random_uuid(), 'Push-Up', 'chest', 'bodyweight'),
+(gen_random_uuid(), 'Pec Deck', 'chest', 'machine'),
+(gen_random_uuid(), 'Decline Bench Press', 'chest', 'free_weight'),
+-- Back (8)
+(gen_random_uuid(), 'Deadlift', 'back', 'free_weight'),
+(gen_random_uuid(), 'Lat Pulldown', 'back', 'machine'),
+(gen_random_uuid(), 'Barbell Row', 'back', 'free_weight'),
+(gen_random_uuid(), 'Seated Cable Row', 'back', 'machine'),
+(gen_random_uuid(), 'T-Bar Row', 'back', 'machine'),
+(gen_random_uuid(), 'Pull-Up', 'back', 'bodyweight'),
+(gen_random_uuid(), 'Face Pull', 'back', 'machine'),
+(gen_random_uuid(), 'Single-Arm Dumbbell Row', 'back', 'free_weight'),
+-- Legs (10)
+(gen_random_uuid(), 'Back Squat', 'legs', 'free_weight'),
+(gen_random_uuid(), 'Leg Press', 'legs', 'machine'),
+(gen_random_uuid(), 'Romanian Deadlift', 'legs', 'free_weight'),
+(gen_random_uuid(), 'Lying Leg Curl', 'legs', 'machine'),
+(gen_random_uuid(), 'Leg Extension', 'legs', 'machine'),
+(gen_random_uuid(), 'Standing Calf Raise', 'legs', 'machine'),
+(gen_random_uuid(), 'Walking Lunges', 'legs', 'free_weight'),
+(gen_random_uuid(), 'Hip Thrust', 'legs', 'free_weight'),
+(gen_random_uuid(), 'Bulgarian Split Squat', 'legs', 'free_weight'),
+(gen_random_uuid(), 'Hack Squat', 'legs', 'machine'),
+-- Shoulders & Arms (10)
+(gen_random_uuid(), 'Overhead Press', 'shoulders_arms', 'free_weight'),
+(gen_random_uuid(), 'Lateral Raise', 'shoulders_arms', 'free_weight'),
+(gen_random_uuid(), 'Barbell Bicep Curl', 'shoulders_arms', 'free_weight'),
+(gen_random_uuid(), 'Tricep Rope Pushdown', 'shoulders_arms', 'machine'),
+(gen_random_uuid(), 'Hammer Curl', 'shoulders_arms', 'free_weight'),
+(gen_random_uuid(), 'Skull Crusher', 'shoulders_arms', 'free_weight'),
+(gen_random_uuid(), 'Front Raise', 'shoulders_arms', 'free_weight'),
+(gen_random_uuid(), 'Reverse Pec Deck', 'shoulders_arms', 'machine'),
+(gen_random_uuid(), 'Preacher Curl', 'shoulders_arms', 'machine'),
+(gen_random_uuid(), 'Overhead Tricep Extension', 'shoulders_arms', 'free_weight'),
+-- Core (6)
+(gen_random_uuid(), 'Plank', 'core', 'bodyweight'),
+(gen_random_uuid(), 'Hanging Leg Raise', 'core', 'bodyweight'),
+(gen_random_uuid(), 'Cable Woodchop', 'core', 'machine'),
+(gen_random_uuid(), 'Ab Rollout', 'core', 'free_weight'),
+(gen_random_uuid(), 'Russian Twist', 'core', 'bodyweight'),
+(gen_random_uuid(), 'Decline Sit-Up', 'core', 'machine'),
+-- Cardio (8)
+(gen_random_uuid(), 'Treadmill Run', 'cardio', 'cardio'),
+(gen_random_uuid(), 'Treadmill Walk', 'cardio', 'cardio'),
+(gen_random_uuid(), 'Stationary Bike', 'cardio', 'cardio'),
+(gen_random_uuid(), 'Rowing Machine', 'cardio', 'cardio'),
+(gen_random_uuid(), 'Elliptical', 'cardio', 'cardio'),
+(gen_random_uuid(), 'Stair Climber', 'cardio', 'cardio'),
+(gen_random_uuid(), 'Jump Rope', 'cardio', 'bodyweight'),
+(gen_random_uuid(), 'Assault Bike', 'cardio', 'cardio'),
+-- Functional (6)
+(gen_random_uuid(), 'Kettlebell Swing', 'functional', 'free_weight'),
+(gen_random_uuid(), 'Box Jump', 'functional', 'bodyweight'),
+(gen_random_uuid(), 'Battle Ropes', 'functional', 'free_weight'),
+(gen_random_uuid(), 'Sled Push', 'functional', 'machine'),
+(gen_random_uuid(), 'Farmer''s Walk', 'functional', 'free_weight'),
+(gen_random_uuid(), 'Medicine Ball Slam', 'functional', 'free_weight'),
+-- Mobility (4)
+(gen_random_uuid(), 'Foam Rolling', 'mobility', 'bodyweight'),
+(gen_random_uuid(), 'Hip Flexor Stretch', 'mobility', 'bodyweight'),
+(gen_random_uuid(), 'Shoulder Dislocates', 'mobility', 'free_weight'),
+(gen_random_uuid(), '90/90 Stretch', 'mobility', 'bodyweight');

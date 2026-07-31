@@ -1,0 +1,64 @@
+{
+  "name": "Ember — Personal Productivity",
+  "short_name": "Ember",
+  "description": "Your day, your habits, your momentum. A remote-control for your productivity.",
+  "id": "ember-pwa",
+  "start_url": "/m",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": ["productivity", "lifestyle", "health"],
+  "icons": [
+    {
+      "src": "/icons/ember-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/ember-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/ember-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/ember-1024.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Quick add",
+      "short_name": "Add",
+      "description": "Add an activity, task, or event",
+      "url": "/m/calendar?new=1",
+      "icons": [{ "src": "/icons/ember-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Today",
+      "short_name": "Today",
+      "description": "Jump to your day at a glance",
+      "url": "/m",
+      "icons": [{ "src": "/icons/ember-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Habits",
+      "short_name": "Habits",
+      "description": "Check off your habits",
+      "url": "/m/habits",
+      "icons": [{ "src": "/icons/ember-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

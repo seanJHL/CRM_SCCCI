@@ -5,6 +5,10 @@
 
 const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8787";
 
+export function getApiUrl(path: string) {
+  return `${API_URL}${path}`;
+}
+
 /** Standard error shape returned by the backend. */
 export interface ApiErrorShape {
   success: false;
@@ -29,7 +33,7 @@ async function request<T>(
   path: string,
   options?: RequestInit,
 ): Promise<T> {
-  const url = `${API_URL}${path}`;
+  const url = getApiUrl(path);
   const res = await fetch(url, {
     ...options,
     headers: {

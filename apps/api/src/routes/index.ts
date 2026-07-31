@@ -1,9 +1,14 @@
 import { Hono } from "hono";
 import type { AppBindings } from "@/types";
 import health from "./health";
-import companies from "./companies";
-import contacts from "./contacts";
-import deals from "./deals";
+import events from "./events";
+import workouts from "./workouts";
+import exercises from "./exercises";
+import habits from "./habits";
+import reminders from "./reminders";
+import planner from "./planner";
+import analytics from "./analytics";
+import push from "./push";
 
 /**
  * Aggregated API router. All sub-routes are mounted under /api.
@@ -11,8 +16,13 @@ import deals from "./deals";
 const routes = new Hono<AppBindings>();
 
 routes.route("/health", health);
-routes.route("/companies", companies);
-routes.route("/contacts", contacts);
-routes.route("/deals", deals);
+routes.route("/events", events);
+routes.route("/workouts", workouts);
+routes.route("/exercises", exercises);
+routes.route("/habits", habits);
+routes.route("/reminders", reminders);
+routes.route("/planner", planner);
+routes.route("/analytics", analytics);
+routes.route("/push", push);
 
 export default routes;

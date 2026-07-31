@@ -1,4 +1,10 @@
 import { createApp } from "./app";
+import { handleCron } from "./cron";
 
 // Cloudflare Workers entry point
-export default createApp();
+const app = createApp();
+
+export default {
+  fetch: app.fetch,
+  scheduled: handleCron,
+};

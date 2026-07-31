@@ -1,0 +1,55 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1785383979656,
+      "tag": "0000_init_ember",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785384100000,
+      "tag": "0001_seed_exercises",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785404454916,
+      "tag": "0002_add_event_tags",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785406799676,
+      "tag": "0003_add_event_link",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1785406800000,
+      "tag": "0004_event_exercises",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1785466800000,
+      "tag": "0005_workout_activities",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1785470400000,
+      "tag": "0006_push_subscriptions",
+      "breakpoints": true
+    }
+  ]
+}

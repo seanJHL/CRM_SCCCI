@@ -1,0 +1,377 @@
+/* ==========================================================================
+   EMBER MOBILE — shadcn / Notion Monochrome Design System
+   Scoped entirely under `.m-app` so it never leaks into the desktop web view.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. Theme tokens — mirrors globals.css shadcn palette
+   -------------------------------------------------------------------------- */
+.m-app,
+.m-mobile-surface {
+  /* Surfaces */
+  --m-bg: hsl(0 0% 100%);
+  --m-surface: hsl(0 0% 100%);
+  --m-surface-2: hsl(0 0% 98%);
+  --m-surface-3: hsl(0 0% 96%);
+
+  /* Lines */
+  --m-border: hsl(0 0% 90%);
+  --m-border-strong: hsl(0 0% 82%);
+
+  /* Text */
+  --m-text: hsl(0 0% 7%);
+  --m-text-2: hsl(0 0% 45%);
+  --m-text-3: hsl(0 0% 62%);
+
+  /* Primary (black) */
+  --m-primary: hsl(0 0% 0%);
+  --m-primary-fg: hsl(0 0% 100%);
+
+  /* Functional — muted, no saturation */
+  --m-success: hsl(0 0% 7%);
+  --m-success-soft: hsl(0 0% 96%);
+  --m-info: hsl(0 0% 45%);
+  --m-info-soft: hsl(0 0% 96%);
+  --m-violet: hsl(0 0% 45%);
+  --m-violet-soft: hsl(0 0% 96%);
+  --m-ember: hsl(0 0% 7%);
+  --m-ember-hot: hsl(0 0% 25%);
+  --m-ember-red: hsl(0 72% 51%);
+  --m-ember-soft: hsl(0 0% 96%);
+  --m-ember-glow: transparent;
+
+  /* Depth — minimal, Notion-like */
+  --m-shadow-raised: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.06);
+  --m-shadow-pressed: 0 1px 1px rgba(0, 0, 0, 0.04) inset;
+
+  /* Motion */
+  --m-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --m-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Safe areas (notch / home indicator) */
+  --m-safe-top: env(safe-area-inset-top, 0px);
+  --m-safe-bottom: env(safe-area-inset-bottom, 0px);
+
+  color-scheme: light;
+  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  background: var(--m-bg);
+  color: var(--m-text);
+  -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
+}
+
+.m-app {
+  position: relative;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  background:
+    radial-gradient(circle at 50% -10%, hsl(0 0% 96%) 0, transparent 32rem),
+    var(--m-bg);
+}
+
+.m-page-shell {
+  padding:
+    calc(var(--m-safe-top) + 10px)
+    clamp(14px, 4vw, 22px)
+    calc(var(--m-safe-bottom) + 152px);
+}
+
+.m-bottom-nav {
+  padding-bottom: var(--m-safe-bottom);
+}
+
+.m-fab {
+  position: fixed;
+  right: max(16px, calc((100vw - 512px) / 2 + 16px));
+  bottom: calc(var(--m-safe-bottom) + 84px);
+  z-index: 40;
+  display: flex;
+  width: 56px;
+  height: 56px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid hsl(0 0% 100% / 0.2);
+  border-radius: 999px;
+  background: var(--m-primary);
+  color: var(--m-primary-fg);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
+}
+
+/* --------------------------------------------------------------------------
+   3. Typography — Inter only, clean hierarchy
+   -------------------------------------------------------------------------- */
+.m-display {
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: -0.025em;
+  font-variant-numeric: tabular-nums;
+}
+
+.m-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--m-text-3);
+}
+
+.m-icon-button {
+  display: inline-flex;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--m-border);
+  border-radius: 999px;
+  background: var(--m-surface-2);
+  color: var(--m-text-2);
+}
+
+/* --------------------------------------------------------------------------
+   4. Surfaces — clean Notion-like cards
+   -------------------------------------------------------------------------- */
+.m-card {
+  background: var(--m-surface);
+  border: 1px solid var(--m-border);
+  border-radius: 12px;
+  box-shadow: var(--m-shadow-raised);
+}
+
+.m-card-flat {
+  background: var(--m-surface);
+  border: 1px solid var(--m-border);
+  border-radius: 10px;
+}
+
+.m-inset {
+  background: var(--m-surface-2);
+  border: 1px solid var(--m-border);
+  border-radius: 8px;
+}
+
+.m-field,
+.m-field-shell {
+  min-height: 50px;
+  border: 1px solid var(--m-border);
+  border-radius: 14px;
+  background: var(--m-surface-2);
+  color: var(--m-text);
+}
+
+.m-field {
+  padding: 0 14px;
+  font-size: 16px;
+  line-height: 1.25;
+  outline: none;
+}
+
+.m-field-shell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 13px;
+}
+
+.m-primary-button,
+.m-secondary-button {
+  display: inline-flex;
+  min-height: 50px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  font-weight: 650;
+}
+
+.m-primary-button {
+  background: var(--m-primary);
+  color: var(--m-primary-fg);
+  font-size: 14px;
+}
+
+.m-secondary-button {
+  border: 1px solid var(--m-border);
+  background: var(--m-surface);
+  color: var(--m-text-2);
+}
+
+.m-primary-button:disabled,
+.m-secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+/* --------------------------------------------------------------------------
+   5. Tactile interaction — subtle press feedback
+   -------------------------------------------------------------------------- */
+.m-press {
+  transition: transform 0.15s var(--m-spring), background-color 0.15s var(--m-ease),
+    border-color 0.15s var(--m-ease), opacity 0.15s var(--m-ease);
+  will-change: transform;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.m-press:active {
+  transform: scale(0.97);
+  opacity: 0.85;
+}
+
+.m-app :where(button, a, input, select, textarea):focus-visible,
+.m-mobile-surface :where(button, a, input, select, textarea):focus-visible {
+  outline: 2px solid var(--m-text);
+  outline-offset: 3px;
+}
+
+.m-btn-raised {
+  background: var(--m-surface-2);
+  border: 1px solid var(--m-border);
+  box-shadow: var(--m-shadow-raised);
+}
+.m-btn-raised:active {
+  box-shadow: var(--m-shadow-pressed);
+  transform: scale(0.97);
+}
+
+/* --------------------------------------------------------------------------
+   6. Primary button style (replaces ember gradient)
+   -------------------------------------------------------------------------- */
+.m-glow-ember {
+  box-shadow: none;
+}
+
+.m-ember-text {
+  color: var(--m-text);
+}
+
+/* --------------------------------------------------------------------------
+   7. Keyframes & living elements — toned down
+   -------------------------------------------------------------------------- */
+@keyframes m-pulse-dot {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.3); opacity: 0.6; }
+}
+@keyframes m-breathe {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+@keyframes m-flicker {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.04); }
+}
+@keyframes m-slide-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes m-pop {
+  0% { transform: scale(0.8); opacity: 0; }
+  70% { transform: scale(1.04); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes m-ring-in {
+  from { stroke-dashoffset: var(--m-ring-circ, 300); }
+}
+@keyframes m-sheet-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+@keyframes m-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.m-sheet-overlay {
+  animation: m-fade 0.22s ease-out both;
+}
+
+.m-sheet-content {
+  animation: m-sheet-up 0.32s var(--m-ease) both;
+  overscroll-behavior: contain;
+}
+@keyframes m-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+@keyframes m-particle {
+  0% { transform: translate(0, 0) scale(1); opacity: 1; }
+  100% { transform: translate(var(--m-px, 0px), var(--m-py, -40px)) scale(0.2); opacity: 0; }
+}
+
+.m-anim-slide-up { animation: m-slide-up 0.35s var(--m-ease) both; }
+.m-anim-pop { animation: m-pop 0.3s var(--m-spring) both; }
+.m-anim-fade { animation: m-fade 0.25s var(--m-ease) both; }
+
+/* Staggered reveal helper — set --m-i per item */
+.m-stagger { animation: m-slide-up 0.35s var(--m-ease) both; animation-delay: calc(var(--m-i, 0) * 50ms); }
+
+/* --------------------------------------------------------------------------
+   8. Scroll utilities
+   -------------------------------------------------------------------------- */
+.m-no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.m-no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.m-snap-x {
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+}
+.m-snap-item {
+  scroll-snap-align: start;
+}
+
+/* --------------------------------------------------------------------------
+   9. Skeleton shimmer (loading states)
+   -------------------------------------------------------------------------- */
+.m-skeleton {
+  background: linear-gradient(90deg, var(--m-surface-2) 25%, var(--m-surface-3) 50%, var(--m-surface-2) 75%);
+  background-size: 200% 100%;
+  animation: m-shimmer 1.4s infinite linear;
+  border-radius: 8px;
+}
+
+@media (max-width: 359px) {
+  .m-page-shell {
+    padding-inline: 12px;
+  }
+
+  .m-bottom-nav span {
+    font-size: 9px;
+  }
+
+  .m-fab {
+    right: 12px;
+  }
+}
+
+@media (min-width: 640px) {
+  .m-sheet-content {
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+  }
+
+  @keyframes m-sheet-up {
+    from {
+      opacity: 0;
+      transform: translate(-50%, 24px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: translate(-50%, 0) scale(1);
+    }
+  }
+}
+
+/* --------------------------------------------------------------------------
+   10. Reduced motion — respect user preference
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .m-app *, .m-app *::before, .m-app *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
