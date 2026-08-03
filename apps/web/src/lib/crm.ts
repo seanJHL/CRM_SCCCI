@@ -238,3 +238,7 @@ export function loadSession(): Promise<SessionData> {
 export function googleSignInUrl(): string {
   return getApiUrl("/api/auth/google");
 }
+
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Something went wrong. Please try again.";
+}
