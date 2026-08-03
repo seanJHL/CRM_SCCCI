@@ -37,6 +37,7 @@ function MobileCrmSettings() {
     onSuccess: () => {
       notify({ title: "Preferences saved" });
     },
+    onError: () => notify({ title: "Couldn't save preferences", body: "Try again in a moment." }),
   });
   const accountMutation = useMutation({
     mutationFn: async (action: Exclude<AccountAction, null>) => {
@@ -47,6 +48,11 @@ function MobileCrmSettings() {
     onSuccess: () => {
       window.location.assign("/login");
     },
+    onError: (_error, action) =>
+      notify({
+        title: `Couldn't ${action === "delete" ? "delete data" : action === "disconnect" ? "disconnect Google" : "log out"}`,
+        body: "Try again in a moment.",
+      }),
   });
 
   return (
