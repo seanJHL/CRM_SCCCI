@@ -482,13 +482,20 @@ git commit -m "feat(web): rebuild /m/crm as a mobile-native layout + Inbox"
 
 **Files:**
 - Modify: `apps/web/src/routes/m/crm/index.tsx`
+- Create: `apps/web/src/components/crm/mobile/mobile-filter-select.tsx`
+  (shared `CATEGORIES`/`PRIORITIES`/`STATUSES` constants and a
+  `MobileFilterSelect` component — Task 3 also imports this rather than
+  redefining it, matching how desktop `crm.tsx` reuses one `FilterSelect`
+  for both filtering and editing)
 
 **Interfaces:**
 - Consumes: `TogglePill` (`@/components/mobile/toggle-pill`), `notify`
   (`@/components/mobile/notification-banner`), and everything Task 1's
   `MobileCrmInbox` already has in scope.
-- Produces: nothing new consumed by later tasks — this task is
-  self-contained polish on top of Task 1's Inbox.
+- Produces: `CATEGORIES`, `PRIORITIES`, `STATUSES` (readonly string-tuple
+  constants) and `MobileFilterSelect({ label, value, values, onChange })`
+  from `@/components/crm/mobile/mobile-filter-select` — Task 3 imports all
+  four.
 
 No automated tests (see Global Constraints) — verify via
 typecheck/lint/manual check.
@@ -846,15 +853,24 @@ of the component's returned JSX (still inside the outer
       </DialogPrimitive.Root>
 ```
 
-Add the filter option lists and `MobileFilterSelect` near the bottom of
-the file (module scope, alongside `formatInboxDate`):
+`MobileFilterSelect` and the category/priority/status option lists are
+also needed by Task 3 (to edit an already-classified thread's
+category/priority/status in Thread Detail) — rather than defining them
+twice, create a shared module now. This mirrors desktop `crm.tsx`, which
+already reuses one `FilterSelect` component for both its Inbox filters
+(where the empty "All categories" option is a real, selectable state) and
+its Thread Detail classification editing (where a real value is always
+selected, so the browser simply never shows the empty option — the
+`<select>` displays whichever `<option>` matches the current `value`).
+
+Create `apps/web/src/components/crm/mobile/mobile-filter-select.tsx`:
 
 ```tsx
-const CATEGORIES = ["general", "urgent", "scheduling", "billing", "support", "newsletter"] as const;
-const PRIORITIES = ["critical", "high", "normal", "low"] as const;
-const STATUSES = ["unread", "read", "replied", "scheduled", "archived", "dismissed"] as const;
+export const CATEGORIES = ["general", "urgent", "scheduling", "billing", "support", "newsletter"] as const;
+export const PRIORITIES = ["critical", "high", "normal", "low"] as const;
+export const STATUSES = ["unread", "read", "replied", "scheduled", "archived", "dismissed"] as const;
 
-function MobileFilterSelect({
+export function MobileFilterSelect({
   label,
   value,
   values,
@@ -887,6 +903,15 @@ function MobileFilterSelect({
 }
 ```
 
+Add this import to `apps/web/src/routes/m/crm/index.tsx` (in place of any
+local `CATEGORIES`/`PRIORITIES`/`STATUSES`/`MobileFilterSelect` definition
+— there should be none in this file, since this is the first task to need
+them):
+
+```tsx
+import { CATEGORIES, MobileFilterSelect, PRIORITIES, STATUSES } from "@/components/crm/mobile/mobile-filter-select";
+```
+
 - [ ] **Step 7: Verify with typecheck, lint, and a manual check**
 
 Run: `pnpm --filter web typecheck` — PASS.
@@ -903,7 +928,7 @@ of selection, and toasts (`notify()`) appear for each bulk action.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add apps/web/src/routes/m/crm/index.tsx
+git add apps/web/src/routes/m/crm/index.tsx apps/web/src/components/crm/mobile/mobile-filter-select.tsx
 git commit -m "feat(web): add filters, select mode, and bulk actions to mobile Inbox"
 ```
 
@@ -917,7 +942,10 @@ git commit -m "feat(web): add filters, select mode, and bulk actions to mobile I
 **Interfaces:**
 - Consumes: `MobileCrmHeader` (Task 1), `ComposerDialog` mode="reply"
   (unchanged, already built), `ThreadDetailData`/`EmailThread`/
-  `EmailCategory`/`EmailPriority`/`EmailStatus` types from `@/lib/crm`.
+  `EmailCategory`/`EmailPriority`/`EmailStatus` types from `@/lib/crm`,
+  and `CATEGORIES`/`PRIORITIES`/`STATUSES`/`MobileFilterSelect` from
+  `@/components/crm/mobile/mobile-filter-select` (Task 2 — do not redefine
+  these locally).
 - Produces: nothing consumed by later tasks.
 
 No automated tests — verify via typecheck/lint/manual check.
@@ -939,6 +967,7 @@ import {
   type EmailThread,
   type ThreadDetailData,
 } from "@/lib/crm";
+import { CATEGORIES, MobileFilterSelect, PRIORITIES, STATUSES } from "@/components/crm/mobile/mobile-filter-select";
 import { MobileErrorState } from "@/components/mobile/error-state";
 import { notify } from "@/components/mobile/notification-banner";
 import { MobileCrmHeader } from "@/components/crm/mobile/mobile-crm-header";
@@ -949,10 +978,6 @@ export const Route = createFileRoute("/m/crm/$threadId")({
 });
 
 const crmLayoutRoute = getRouteApi("/m/crm");
-
-const CATEGORIES = ["general", "urgent", "scheduling", "billing", "support", "newsletter"] as const;
-const PRIORITIES = ["critical", "high", "normal", "low"] as const;
-const STATUSES = ["unread", "read", "replied", "scheduled", "archived", "dismissed"] as const;
 
 function MobileCrmThreadDetail() {
   const { threadId } = Route.useParams();
@@ -1123,35 +1148,6 @@ function MobileCrmThreadDetail() {
         }}
       />
     </div>
-  );
-}
-
-function MobileFilterSelect({
-  label,
-  value,
-  values,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  values: readonly string[];
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label className="block">
-      <span className="mb-1.5 block text-[10px] font-semibold text-[var(--m-text-2)]">{label}</span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="m-field w-full appearance-none capitalize"
-      >
-        {values.map((item) => (
-          <option key={item} value={item}>
-            {item}
-          </option>
-        ))}
-      </select>
-    </label>
   );
 }
 
