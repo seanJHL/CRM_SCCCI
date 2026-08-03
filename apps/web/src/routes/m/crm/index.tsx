@@ -129,9 +129,9 @@ function MobileCrmInbox() {
       <div className="m-card divide-y divide-[var(--m-border)] overflow-hidden">
         {threadsQuery.isLoading ? (
           <>
-            <div className="m-skeleton m-inset m-8 h-[76px]" />
-            <div className="m-skeleton m-inset m-8 h-[76px]" />
-            <div className="m-skeleton m-inset m-8 h-[76px]" />
+            <div className="m-skeleton h-[76px]" />
+            <div className="m-skeleton h-[76px]" />
+            <div className="m-skeleton h-[76px]" />
           </>
         ) : threads.length === 0 ? (
           <div className="flex min-h-40 flex-col items-center justify-center gap-2 p-6 text-center">
