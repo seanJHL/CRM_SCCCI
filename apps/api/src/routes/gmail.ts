@@ -20,6 +20,7 @@ import {
   getValidAccessToken,
   GOOGLE_SCOPE,
 } from "@/lib/google-oauth";
+import { createCalendarBooking } from "@/lib/booking";
 import {
   gmailListThreads,
   gmailGetThread,
@@ -75,6 +76,30 @@ const bulkUpdateSchema = z.object({
 
 const bulkReplySchema = z.object({
   threadIds: z.array(z.string().min(1)).min(1).max(20),
+});
+
+const sendMessageMeetingSchema = z
+  .object({
+    title: z.string().trim().min(1).max(300),
+    start: z.string().datetime(),
+    end: z.string().datetime(),
+    attendees: z.array(z.object({ email: z.string().email() })).max(50).optional(),
+    description: z.string().max(5000).optional(),
+    location: z.string().max(500).optional(),
+    addMeetLink: z.boolean().optional(),
+    allowOutsideWorkingHours: z.boolean().optional(),
+  })
+  .refine((value) => new Date(value.end) > new Date(value.start), {
+    message: "End time must be after start time",
+    path: ["end"],
+  });
+
+const sendMessageSchema = z.object({
+  to: z.string().email(),
+  subject: z.string().trim().min(1).max(500),
+  body: z.string().trim().min(1).max(100_000),
+  confirmed: z.literal(true),
+  meeting: sendMessageMeetingSchema.optional(),
 });
 
 // --- GET / — list threads (fetches from Gmail, caches + classifies) ---
@@ -148,6 +173,68 @@ gmailRoute.get("/", async (c) => {
   if (sender) filtered = filtered.filter((t) => t.fromEmail?.includes(sender));
 
   return c.json(ok({ threads: filtered, cached: false }));
+});
+
+// --- POST /send — compose and send a brand-new message, optionally booking a meeting ---
+
+gmailRoute.post("/send", async (c) => {
+  const env = getEnv(c.env);
+  const db = createDatabase(env.databaseUrl);
+  const userId = c.get("userId");
+  const user = c.get("user");
+  const { to, subject, body, meeting } = sendMessageSchema.parse(
+    await c.req.json(),
+  );
+
+  const accessToken = await getValidAccessToken(db, env, userId, [
+    GOOGLE_SCOPE.GMAIL_READ,
+    GOOGLE_SCOPE.GMAIL_SEND,
+  ]);
+
+  const sendResult = await gmailSendReply(accessToken, { to, subject, body });
+  const detail = await gmailGetThread(accessToken, sendResult.threadId);
+  const cachedThread = await cacheAndClassifyThread(
+    db,
+    userId,
+    user.timezone,
+    detail,
+  );
+
+  await logAction(db, userId, AuditAction.EMAIL_SEND, "email_thread", cachedThread.id, {
+    threadId: sendResult.threadId,
+    to,
+    messageId: sendResult.id,
+  });
+
+  let booking: Awaited<ReturnType<typeof createCalendarBooking>>["booking"] | null = null;
+  let bookingError: string | undefined;
+  if (meeting) {
+    try {
+      const created = await createCalendarBooking(db, env, userId, user, {
+        ...meeting,
+        sourceThreadId: cachedThread.id,
+      });
+      booking = created.booking;
+    } catch (error) {
+      // The email is not reversible — a booking failure (e.g. a conflict
+      // that appeared between slot suggestion and confirmation) must not
+      // be reported as if the whole action failed.
+      bookingError =
+        error instanceof ApiError
+          ? error.message
+          : "The calendar event could not be created.";
+    }
+  }
+
+  return c.json(
+    ok({
+      sent: true,
+      messageId: sendResult.id,
+      threadId: cachedThread.gmailThreadId,
+      booking,
+      bookingError,
+    }),
+  );
 });
 
 // --- GET /:threadId — full thread detail ---
