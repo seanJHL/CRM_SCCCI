@@ -2,7 +2,7 @@ import { createFileRoute, getRouteApi, useNavigate } from "@tanstack/react-route
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { Filter, Mail, RefreshCw, SquarePen } from "lucide-react";
+import { Filter, Mail, RefreshCw, Settings, SquarePen } from "lucide-react";
 import { api, ApiClientError } from "@/lib/api";
 import { type EmailThread, type GmailStats } from "@/lib/crm";
 import { MobileErrorState } from "@/components/mobile/error-state";
@@ -128,13 +128,23 @@ function MobileCrmInbox() {
       <MobileCrmHeader
         title="Inbox"
         actionsRight={
-          <button
-            type="button"
-            onClick={() => setComposerOpen(true)}
-            className="m-press flex h-11 items-center gap-1.5 rounded-full bg-[var(--m-primary)] px-3.5 text-[12px] font-semibold text-[var(--m-primary-fg)]"
-          >
-            <SquarePen width={15} height={15} /> Compose
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={() => void navigate({ to: "/m/crm/settings" })}
+              className="m-icon-button m-press"
+              aria-label="Settings"
+            >
+              <Settings width={17} height={17} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setComposerOpen(true)}
+              className="m-press flex h-11 items-center gap-1.5 rounded-full bg-[var(--m-primary)] px-3.5 text-[12px] font-semibold text-[var(--m-primary-fg)]"
+            >
+              <SquarePen width={15} height={15} /> Compose
+            </button>
+          </>
         }
       />
 
