@@ -46,5 +46,8 @@ lerna-debug.log*
 # turbo
 .turbo
 
+# git worktrees
+.worktrees
+
 # wrangler
 .wrangler
