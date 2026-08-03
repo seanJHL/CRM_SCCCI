@@ -93,12 +93,6 @@ body.ember-mobile-active {
   overflow: hidden;
 }
 
-.m-page-shell.is-crm {
-  max-width: 100%;
-  padding: 0 0 calc(var(--m-safe-bottom) + 76px);
-  background: hsl(0 0% 100%);
-}
-
 .m-bottom-nav {
   padding-bottom: var(--m-safe-bottom);
 }

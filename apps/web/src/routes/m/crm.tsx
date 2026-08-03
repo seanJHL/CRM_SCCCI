@@ -1,5 +1,4 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
-import { CrmDashboard } from "@/routes/crm";
+import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
 import { loadSession, type SessionData } from "@/lib/crm";
 
 export const Route = createFileRoute("/m/crm")({
@@ -15,10 +14,5 @@ export const Route = createFileRoute("/m/crm")({
     }
     return { session };
   },
-  component: MobileCrm,
+  component: () => <Outlet />,
 });
-
-function MobileCrm() {
-  const { session } = Route.useRouteContext();
-  return <CrmDashboard initialSession={session} />;
-}
