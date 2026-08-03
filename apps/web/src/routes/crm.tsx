@@ -371,7 +371,7 @@ export function CrmDashboard({ initialSession }: { initialSession: SessionData }
           )}
       </main>
 
-      {composerOpen && composeMode === "reply" && selectedThread && (
+      {selectedThread && composeMode === "reply" && (
         <ComposerDialog
           mode="reply"
           open={composerOpen}
