@@ -7,11 +7,12 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { eq, and, desc, sql, inArray } from "drizzle-orm";
 import type { AppBindings } from "@/types";
-import { createDatabase } from "@/db";
+import { createDatabase, type Database } from "@/db";
 import {
   emailThreads,
   suggestedReplies,
   meetingRequests,
+  type EmailThread,
 } from "@/db/schema";
 import { ApiError, ok } from "@/lib/utils";
 import { getEnv } from "@/lib/env";
@@ -24,6 +25,7 @@ import {
   gmailGetThread,
   gmailSendReply,
   type GmailMessage,
+  type GmailThreadDetail,
 } from "@/lib/google-api";
 import { classifyEmail } from "@/lib/email-classifier";
 import { generateReply } from "@/lib/reply-generator";
@@ -132,107 +134,9 @@ gmailRoute.get("/", async (c) => {
   const threads = [];
   for (const result of threadDetails) {
     if (result.status !== "fulfilled") continue;
-    const detail = result.value;
-    const lastIncoming = [...detail.messages]
-      .reverse()
-      .find((message) => !message.labelIds.includes("SENT"));
-    const classificationText = detail.messages
-      .slice(-4)
-      .map((message) => message.bodyText || message.snippet)
-      .join("\n\n")
-      .slice(0, 20_000);
-
-    // Classify
-    const classification = classifyEmail(
-      detail.subject,
-      lastIncoming?.fromEmail ?? detail.fromEmail,
-      classificationText || detail.snippet,
+    threads.push(
+      await cacheAndClassifyThread(db, userId, c.get("user").timezone, result.value),
     );
-    const latestIsIncoming = !detail.lastMessage.labelIds.includes("SENT");
-    const requiresResponse = latestIsIncoming && classification.requiresResponse;
-
-    // Upsert to DB
-    const [existing] = await db
-      .select()
-      .from(emailThreads)
-      .where(
-        and(
-          eq(emailThreads.userId, userId),
-          eq(emailThreads.gmailThreadId, detail.id),
-        ),
-      );
-
-    const importanceReasons = [...classification.importanceReasons];
-    if (existing?.categoryManuallySet) {
-      importanceReasons.push("Category was set manually");
-    }
-    if (existing?.priorityManuallySet) {
-      importanceReasons.push("Priority was set manually");
-    }
-    const importanceReason = JSON.stringify(importanceReasons);
-
-    if (existing) {
-      const [updated] = await db
-        .update(emailThreads)
-        .set({
-          subject: detail.subject,
-          snippet: lastIncoming?.snippet ?? detail.snippet,
-          fromEmail: lastIncoming?.fromEmail ?? detail.fromEmail,
-          fromName: lastIncoming?.fromName ?? detail.fromName,
-          lastMessageDate: detail.lastMessageDate,
-          ...(!existing.categoryManuallySet && {
-            category: classification.category,
-          }),
-          ...(!existing.priorityManuallySet && {
-            priority: classification.priority,
-          }),
-          requiresResponse,
-          ...(latestIsIncoming &&
-            detail.lastMessageDate > (existing.lastMessageDate ?? new Date(0)) && {
-              status: detail.hasUnread ? "unread" : "read",
-            }),
-          importanceReason,
-          hasUnread: detail.hasUnread,
-          updatedAt: new Date(),
-        })
-        .where(eq(emailThreads.id, existing.id))
-        .returning();
-      threads.push(updated);
-    } else {
-      const [created] = await db
-        .insert(emailThreads)
-        .values({
-          userId,
-          gmailThreadId: detail.id,
-          subject: detail.subject,
-          snippet: detail.snippet,
-          fromEmail: lastIncoming?.fromEmail ?? detail.fromEmail,
-          fromName: lastIncoming?.fromName ?? detail.fromName,
-          lastMessageDate: detail.lastMessageDate,
-          category: classification.category,
-          priority: classification.priority,
-          requiresResponse,
-          status: detail.hasUnread ? "unread" : "read",
-          importanceReason,
-          hasUnread: detail.hasUnread,
-        })
-        .returning();
-      threads.push(created);
-    }
-
-    // If meeting request detected, store it
-    if (classification.hasMeetingRequest) {
-      await db
-        .insert(meetingRequests)
-        .values({
-          userId,
-          threadId: threads[threads.length - 1]!.id,
-          rawText: `${detail.subject} ${lastIncoming?.snippet ?? detail.snippet}`.slice(0, 2_000),
-          timezone: c.get("user").timezone,
-          status: "detected",
-        })
-        .onConflictDoNothing();
-    }
   }
 
   // Apply filters
@@ -870,6 +774,119 @@ gmailRoute.get("/stats", async (c) => {
 });
 
 export default gmailRoute;
+
+/**
+ * Classify a Gmail thread and upsert it into the emailThreads cache,
+ * recording a detected meeting request if one is present. Used both when
+ * syncing the inbox and right after sending a brand-new message.
+ */
+async function cacheAndClassifyThread(
+  db: Database,
+  userId: string,
+  timezone: string,
+  detail: GmailThreadDetail,
+): Promise<EmailThread> {
+  const lastIncoming = [...detail.messages]
+    .reverse()
+    .find((message) => !message.labelIds.includes("SENT"));
+  const classificationText = detail.messages
+    .slice(-4)
+    .map((message) => message.bodyText || message.snippet)
+    .join("\n\n")
+    .slice(0, 20_000);
+
+  const classification = classifyEmail(
+    detail.subject,
+    lastIncoming?.fromEmail ?? detail.fromEmail,
+    classificationText || detail.snippet,
+  );
+  const latestIsIncoming = !detail.lastMessage.labelIds.includes("SENT");
+  const requiresResponse = latestIsIncoming && classification.requiresResponse;
+
+  const [existing] = await db
+    .select()
+    .from(emailThreads)
+    .where(
+      and(
+        eq(emailThreads.userId, userId),
+        eq(emailThreads.gmailThreadId, detail.id),
+      ),
+    );
+
+  const importanceReasons = [...classification.importanceReasons];
+  if (existing?.categoryManuallySet) {
+    importanceReasons.push("Category was set manually");
+  }
+  if (existing?.priorityManuallySet) {
+    importanceReasons.push("Priority was set manually");
+  }
+  const importanceReason = JSON.stringify(importanceReasons);
+
+  let thread: EmailThread;
+  if (existing) {
+    const [updated] = await db
+      .update(emailThreads)
+      .set({
+        subject: detail.subject,
+        snippet: lastIncoming?.snippet ?? detail.snippet,
+        fromEmail: lastIncoming?.fromEmail ?? detail.fromEmail,
+        fromName: lastIncoming?.fromName ?? detail.fromName,
+        lastMessageDate: detail.lastMessageDate,
+        ...(!existing.categoryManuallySet && {
+          category: classification.category,
+        }),
+        ...(!existing.priorityManuallySet && {
+          priority: classification.priority,
+        }),
+        requiresResponse,
+        ...(latestIsIncoming &&
+          detail.lastMessageDate > (existing.lastMessageDate ?? new Date(0)) && {
+            status: detail.hasUnread ? "unread" : "read",
+          }),
+        importanceReason,
+        hasUnread: detail.hasUnread,
+        updatedAt: new Date(),
+      })
+      .where(eq(emailThreads.id, existing.id))
+      .returning();
+    thread = updated!;
+  } else {
+    const [created] = await db
+      .insert(emailThreads)
+      .values({
+        userId,
+        gmailThreadId: detail.id,
+        subject: detail.subject,
+        snippet: detail.snippet,
+        fromEmail: lastIncoming?.fromEmail ?? detail.fromEmail,
+        fromName: lastIncoming?.fromName ?? detail.fromName,
+        lastMessageDate: detail.lastMessageDate,
+        category: classification.category,
+        priority: classification.priority,
+        requiresResponse,
+        status: detail.hasUnread ? "unread" : "read",
+        importanceReason,
+        hasUnread: detail.hasUnread,
+      })
+      .returning();
+    thread = created!;
+  }
+
+  if (classification.hasMeetingRequest) {
+    await db
+      .insert(meetingRequests)
+      .values({
+        userId,
+        threadId: thread.id,
+        rawText: `${detail.subject} ${lastIncoming?.snippet ?? detail.snippet}`.slice(0, 2_000),
+        timezone,
+        status: "detected",
+      })
+      .onConflictDoNothing();
+  }
+
+  return thread;
+}
 
 function parseImportanceReasons(raw: string | null | undefined): string[] {
   if (!raw) return [];
