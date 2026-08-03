@@ -238,10 +238,6 @@ function MobileCrmInbox() {
                 })
               }
               onOpen={() =>
-                // @ts-expect-error -- /m/crm/$threadId doesn't exist until Task 3 creates
-                // it; TanStack Router's typed routes reject this forward reference until
-                // then. Remove this suppression once that route file lands (it will start
-                // failing as unused, which is the intended signal to remove it).
                 void navigate({ to: "/m/crm/$threadId", params: { threadId: thread.gmailThreadId } })
               }
             />
