@@ -59,6 +59,7 @@ function MobileCrmThreadDetail() {
     mutationFn: (updates: Partial<Pick<EmailThread, "category" | "priority" | "status">>) =>
       api.patch(`/api/gmail/${threadId}`, updates),
     onSuccess: invalidateInbox,
+    onError: () => notify({ title: "Couldn't update thread", body: "Try again in a moment." }),
   });
 
   if (detailQuery.isLoading) {
@@ -199,7 +200,7 @@ function MobileCrmThreadDetail() {
         invalidateInbox={invalidateInbox}
         onNotice={(message) => {
           notify({ title: message });
-          if (message.toLowerCase().includes("sent")) void navigate({ to: "/m/crm" });
+          if (message === "Reply sent through Gmail.") void navigate({ to: "/m/crm" });
         }}
       />
     </div>
