@@ -20,7 +20,14 @@ export function errorHandler() {
         "errors" in err && Array.isArray((err as { errors: unknown }).errors)
           ? (err as { errors: unknown }).errors
           : undefined;
-      console.error("[error-handler] Validation error", { requestId, details });
+      console.error(
+        JSON.stringify({
+          level: "error",
+          type: "validation_error",
+          requestId,
+          details,
+        }),
+      );
       return c.json(
         {
           success: false,
@@ -38,12 +45,16 @@ export function errorHandler() {
     // Our own typed errors
     if (err instanceof ApiError) {
       if (err.statusCode >= 500) {
-        console.error("[error-handler] Server error", {
-          requestId,
-          code: err.code,
-          message: err.message,
-          stack: err.stack,
-        });
+        console.error(
+          JSON.stringify({
+            level: "error",
+            type: "api_error",
+            requestId,
+            code: err.code,
+            message: err.message,
+            stack: err.stack,
+          }),
+        );
       }
       return c.json(
         {
@@ -60,12 +71,16 @@ export function errorHandler() {
     }
 
     // Unknown errors — hide details in non-development environments
-    console.error("[error-handler] Unhandled error", {
-      requestId,
-      name: err.name,
-      message: err.message,
-      stack: err.stack,
-    });
+    console.error(
+      JSON.stringify({
+        level: "error",
+        type: "unhandled_error",
+        requestId,
+        name: err.name,
+        message: err.message,
+        stack: err.stack,
+      }),
+    );
 
     const message = env.environment === "development" ? err.message : "Internal server error";
     return c.json(

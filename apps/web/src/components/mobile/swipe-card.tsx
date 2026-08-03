@@ -86,7 +86,7 @@ export function SwipeCard({ children, onComplete, completed, disabled, className
         className="absolute inset-0 flex items-center gap-3 rounded-xl border border-[var(--m-border)] bg-[var(--m-surface-2)] px-5 opacity-0"
         style={{ transition: "opacity 0.15s linear" }}
       >
-        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--m-primary)] text-white">
+        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--m-primary)] text-[var(--m-primary-fg)]">
           <Check width={14} height={14} strokeWidth={3} />
         </span>
         <span className="text-sm font-medium text-[var(--m-text)]">Done</span>

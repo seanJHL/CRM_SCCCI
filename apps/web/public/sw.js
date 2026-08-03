@@ -1,4 +1,4 @@
-/* global self, caches, fetch, URL, Response */
+/* global self, caches, fetch, URL, Response, Request */
 /**
  * Ember Service Worker
  *
@@ -10,7 +10,7 @@
  * This file is served statically from /sw.js and registered by the mobile app.
  */
 
-const CACHE_VERSION = "ember-v2";
+const CACHE_VERSION = "ember-v3";
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const API_CACHE = `${CACHE_VERSION}-api`;
 
@@ -25,7 +25,13 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     caches
       .open(STATIC_CACHE)
-      .then((cache) => cache.addAll(APP_SHELL))
+      .then((cache) =>
+        Promise.allSettled(
+          APP_SHELL.map((url) =>
+            cache.add(new Request(url, { cache: "reload" })),
+          ),
+        ),
+      )
       .then(() => self.skipWaiting()),
   );
 });
@@ -65,30 +71,41 @@ self.addEventListener("fetch", (event) => {
 
   // Navigations: network-first with offline app-shell fallback.
   if (request.mode === "navigate") {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          const copy = response.clone();
-          caches.open(STATIC_CACHE).then((cache) => cache.put("/m", copy));
-          return response;
-        })
-        .catch(() => caches.match("/m")),
-    );
+    event.respondWith(networkFirstNavigation(request));
     return;
   }
 
-  // Static assets (same-origin): stale-while-revalidate.
+  // Static assets (same-origin): cache-first. Vite fingerprints application
+  // assets, while a service-worker version bump refreshes stable files.
   if (url.origin === self.location.origin) {
-    event.respondWith(staleWhileRevalidate(request, STATIC_CACHE));
+    event.respondWith(cacheFirst(request, STATIC_CACHE));
   }
 });
+
+async function networkFirstNavigation(request) {
+  try {
+    const response = await fetch(request);
+    const contentType = response.headers.get("content-type") || "";
+    if (response.ok && contentType.includes("text/html")) {
+      const cache = await caches.open(STATIC_CACHE);
+      await Promise.all([
+        cache.put(request, response.clone()),
+        cache.put("/m", response.clone()),
+      ]);
+    }
+    return response;
+  } catch {
+    return (await caches.match(request)) || (await caches.match("/m")) || Response.error();
+  }
+}
 
 async function networkFirst(request, cacheName) {
   try {
     const response = await fetch(request);
     if (response.ok) {
       const copy = response.clone();
-      caches.open(cacheName).then((cache) => cache.put(request, copy));
+      const cache = await caches.open(cacheName);
+      await cache.put(request, copy);
     }
     return response;
   } catch {
@@ -97,16 +114,14 @@ async function networkFirst(request, cacheName) {
   }
 }
 
-async function staleWhileRevalidate(request, cacheName) {
+async function cacheFirst(request, cacheName) {
   const cache = await caches.open(cacheName);
   const cached = await cache.match(request);
-  const network = fetch(request)
-    .then((response) => {
-      if (response.ok) cache.put(request, response.clone());
-      return response;
-    })
-    .catch(() => cached);
-  return cached || network;
+  if (cached) return cached;
+
+  const response = await fetch(request);
+  if (response.ok) await cache.put(request, response.clone());
+  return response;
 }
 
 // ---------------------------------------------------------------------------
@@ -125,8 +140,8 @@ self.addEventListener("push", (event) => {
 
   const options = {
     body: payload.body,
-    icon: "/icons/ember-192.png",
-    badge: "/icons/ember-192.png",
+    icon: payload.icon || "/icons/ember-192.png",
+    badge: payload.badge || "/icons/ember-192.png",
     tag: payload.tag || "ember-notification",
     renotify: Boolean(payload.tag),
     data: { url: payload.url || "/m" },
@@ -140,14 +155,22 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const targetUrl = (event.notification.data && event.notification.data.url) || "/m";
+  const requestedUrl = (event.notification.data && event.notification.data.url) || "/m";
+  const parsedUrl = new URL(requestedUrl, self.location.origin);
+  const targetUrl =
+    parsedUrl.origin === self.location.origin
+      ? `${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}`
+      : "/m";
 
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
       // Focus an existing window if one matches, navigating it if needed.
       for (const client of clientList) {
         if ("focus" in client) {
-          if (new URL(client.url).pathname === targetUrl) return client.focus();
+          const clientUrl = new URL(client.url);
+          if (`${clientUrl.pathname}${clientUrl.search}${clientUrl.hash}` === targetUrl) {
+            return client.focus();
+          }
         }
       }
       if (clientList.length > 0 && "navigate" in clientList[0]) {

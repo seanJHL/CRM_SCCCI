@@ -1,17 +1,18 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { format } from "date-fns";
+import { addDays, format } from "date-fns";
 import {
   Activity,
   CalendarDays,
   CheckSquare2,
   ChevronDown,
   Clock3,
+  Repeat,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
-import { queryKeys } from "@/lib/query-keys";
+import { queryKeys, type Event } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
 import { notify } from "@/components/mobile/notification-banner";
 
@@ -69,6 +70,17 @@ const CAPTURE_TYPES = [
 ] as const;
 
 const DURATIONS = [15, 30, 45, 60, 90, 120] as const;
+const RECURRENCE_PRESETS = [
+  { label: "Never", rule: "" },
+  { label: "Daily", rule: "FREQ=DAILY;INTERVAL=1" },
+  { label: "Weekly", rule: "FREQ=WEEKLY;INTERVAL=1" },
+  { label: "Every 2 weeks", rule: "FREQ=WEEKLY;INTERVAL=2" },
+  { label: "Monthly", rule: "FREQ=MONTHLY;INTERVAL=1" },
+] as const;
+
+function recurrenceExpiry(date: string) {
+  return format(addDays(new Date(`${date}T12:00:00`), 30), "yyyy-MM-dd");
+}
 
 function defaultSchedule() {
   const date = new Date();
@@ -92,6 +104,10 @@ export function QuickActionSheet({
   const [date, setDate] = useState(() => defaultSchedule().date);
   const [time, setTime] = useState(() => defaultSchedule().time);
   const [duration, setDuration] = useState(60);
+  const [recurrenceRule, setRecurrenceRule] = useState("");
+  const [recurrenceExpiryAt, setRecurrenceExpiryAt] = useState(() =>
+    recurrenceExpiry(defaultSchedule().date),
+  );
 
   const activeType = useMemo(
     () => CAPTURE_TYPES.find((type) => type.id === kind) ?? CAPTURE_TYPES[2],
@@ -100,12 +116,14 @@ export function QuickActionSheet({
 
   const createMutation = useMutation({
     mutationFn: (payload: Record<string, unknown>) =>
-      api.post("/api/events", payload),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.events.all });
+      api.post<Event>("/api/events", payload),
+    onSuccess: async () => {
+      // Wait for the active agenda surface to refresh before dismissing the
+      // sheet, while marking every other calendar range stale for navigation.
+      await queryClient.invalidateQueries({ queryKey: queryKeys.events.all });
       notify({
         title: `${activeType.label} added`,
-        body: `${title.trim()} is on your calendar.`,
+        body: `${title.trim()} is on your board and calendar.`,
       });
       onClose();
     },
@@ -123,6 +141,10 @@ export function QuickActionSheet({
     setDate(request?.date ?? nextSchedule.date);
     setTime(nextSchedule.time);
     setDuration(nextType.duration);
+    setRecurrenceRule("");
+    setRecurrenceExpiryAt(
+      recurrenceExpiry(request?.date ?? nextSchedule.date),
+    );
   }, [open, request]);
 
   const selectKind = (nextKind: CaptureKind) => {
@@ -145,11 +167,26 @@ export function QuickActionSheet({
     }
     setDate(format(next, "yyyy-MM-dd"));
     setTime(format(next, "HH:mm"));
+    if (recurrenceRule) {
+      setRecurrenceExpiryAt(format(addDays(next, 30), "yyyy-MM-dd"));
+    }
   };
+
+  const selectRecurrence = (rule: string) => {
+    setRecurrenceRule(rule);
+    if (rule && recurrenceExpiryAt <= date) {
+      setRecurrenceExpiryAt(recurrenceExpiry(date));
+    }
+  };
+
+  const recurrenceError =
+    recurrenceRule && recurrenceExpiryAt <= date
+      ? "Repeat-until date must be after the first event."
+      : null;
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
-    if (!title.trim() || createMutation.isPending) return;
+    if (!title.trim() || createMutation.isPending || recurrenceError) return;
 
     const start = new Date(`${date}T${time}:00`);
     if (Number.isNaN(start.getTime())) return;
@@ -161,6 +198,10 @@ export function QuickActionSheet({
       endAt: end.toISOString(),
       category: activeType.category,
       tags: kind,
+      recurrenceRule,
+      recurrenceExpiryAt: recurrenceRule
+        ? new Date(`${recurrenceExpiryAt}T23:59:59`).toISOString()
+        : "",
     });
   };
 
@@ -174,7 +215,7 @@ export function QuickActionSheet({
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="m-sheet-overlay fixed inset-0 z-50 bg-black/35 backdrop-blur-[2px]" />
         <DialogPrimitive.Content
-          className="m-mobile-surface m-sheet-content fixed inset-x-0 bottom-0 z-50 mx-auto max-h-[min(92dvh,760px)] w-full max-w-lg overflow-y-auto rounded-t-[28px] border border-b-0 border-[var(--m-border)] bg-[var(--m-surface)] px-4 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-3 shadow-[0_-18px_50px_rgba(0,0,0,0.16)] sm:bottom-4 sm:rounded-[28px] sm:border sm:pb-5"
+          className="m-mobile-surface m-controller-surface m-sheet-content fixed bottom-0 z-50 max-h-[min(92dvh,760px)] overflow-x-hidden overflow-y-auto rounded-t-[28px] border border-b-0 border-[var(--m-border)] bg-[var(--m-surface)] px-4 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-3 shadow-[0_-18px_50px_rgba(0,0,0,0.16)] sm:bottom-4 sm:rounded-[28px] sm:border sm:pb-5"
           onOpenAutoFocus={(event) => {
             event.preventDefault();
             window.setTimeout(() => titleRef.current?.focus(), 80);
@@ -234,7 +275,7 @@ export function QuickActionSheet({
                         className={cn(
                           "mt-0.5 block truncate text-[10px]",
                           selected
-                            ? "text-white/65"
+                            ? "text-[var(--m-primary-fg)] opacity-60"
                             : "text-[var(--m-text-3)]",
                         )}
                       >
@@ -300,7 +341,13 @@ export function QuickActionSheet({
                 <input
                   type="date"
                   value={date}
-                  onChange={(event) => setDate(event.target.value)}
+                  onChange={(event) => {
+                    const nextDate = event.target.value;
+                    setDate(nextDate);
+                    if (recurrenceRule && recurrenceExpiryAt <= nextDate) {
+                      setRecurrenceExpiryAt(recurrenceExpiry(nextDate));
+                    }
+                  }}
                   className="min-w-0 flex-1 bg-transparent text-[16px] focus:outline-none"
                   required
                 />
@@ -348,6 +395,65 @@ export function QuickActionSheet({
               />
             </label>
 
+            <label className="m-field-shell mt-2">
+              <Repeat
+                width={16}
+                height={16}
+                aria-hidden="true"
+                className="shrink-0 text-[var(--m-text-3)]"
+              />
+              <span className="flex-1 text-[13px] font-medium text-[var(--m-text-2)]">
+                Repeat
+              </span>
+              <select
+                value={recurrenceRule}
+                onChange={(event) => selectRecurrence(event.target.value)}
+                className="max-w-[58%] appearance-none truncate bg-transparent text-right text-[15px] font-semibold text-[var(--m-text)] focus:outline-none"
+                aria-label="Repeat schedule"
+              >
+                {RECURRENCE_PRESETS.map((preset) => (
+                  <option key={preset.label} value={preset.rule}>
+                    {preset.label}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown
+                width={15}
+                height={15}
+                aria-hidden="true"
+                className="text-[var(--m-text-3)]"
+              />
+            </label>
+
+            {recurrenceRule && (
+              <label className="m-field-shell mt-2">
+                <CalendarDays
+                  width={16}
+                  height={16}
+                  aria-hidden="true"
+                  className="shrink-0 text-[var(--m-text-3)]"
+                />
+                <span className="flex-1 text-[13px] font-medium text-[var(--m-text-2)]">
+                  Repeat until
+                </span>
+                <input
+                  type="date"
+                  min={format(addDays(new Date(`${date}T12:00:00`), 1), "yyyy-MM-dd")}
+                  value={recurrenceExpiryAt}
+                  onChange={(event) => setRecurrenceExpiryAt(event.target.value)}
+                  className="min-w-0 max-w-[58%] bg-transparent text-right text-[15px] font-semibold focus:outline-none"
+                  aria-label="Repeat until date"
+                  required
+                />
+              </label>
+            )}
+
+            {recurrenceError && (
+              <p className="mt-2 text-[11px] text-red-300" role="alert">
+                {recurrenceError}
+              </p>
+            )}
+
             {createMutation.isError && (
               <p
                 className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-[12px] leading-snug text-red-700"
@@ -360,7 +466,7 @@ export function QuickActionSheet({
 
             <button
               type="submit"
-              disabled={!title.trim() || createMutation.isPending}
+              disabled={!title.trim() || createMutation.isPending || Boolean(recurrenceError)}
               className="m-primary-button m-press mt-4 w-full"
             >
               {createMutation.isPending

@@ -9,6 +9,16 @@ import type { Event } from "@/lib/query-keys";
  */
 
 export type EventCategory = "meeting" | "shift" | "personal" | "deadline";
+export type ScheduleItemKind = "activity" | "task" | "event";
+
+export const SCHEDULE_ITEM_META: Record<
+  ScheduleItemKind,
+  { label: string; shortLabel: string }
+> = {
+  activity: { label: "Activity", shortLabel: "ACT" },
+  task: { label: "Task", shortLabel: "TSK" },
+  event: { label: "Event", shortLabel: "EVT" },
+};
 
 export interface PaletteColor {
   id: string;
@@ -140,6 +150,20 @@ export function parseTags(raw: string | null | undefined): string[] {
     .split(",")
     .map((tag) => tag.trim())
     .filter(Boolean);
+}
+
+/**
+ * Quick capture stores the item's type as a tag so activities, tasks, and
+ * events can share the calendar model while retaining their identity.
+ * Older and desktop-created entries safely fall back to a regular event.
+ */
+export function scheduleItemKind(
+  event: Pick<Event, "tags">,
+): ScheduleItemKind {
+  const tags = new Set(parseTags(event.tags).map((tag) => tag.toLowerCase()));
+  if (tags.has("activity")) return "activity";
+  if (tags.has("task")) return "task";
+  return "event";
 }
 
 export function serializeTags(tags: string[]): string {

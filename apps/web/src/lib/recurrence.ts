@@ -1,4 +1,4 @@
-import { addDays, addWeeks, addMonths, isBefore, startOfDay } from "date-fns";
+import { addDays, addWeeks, addMonths, isBefore } from "date-fns";
 import type { Event } from "@/lib/query-keys";
 
 export interface EventOccurrence {
@@ -6,6 +6,15 @@ export interface EventOccurrence {
   occurrenceStart: Date;
   occurrenceEnd: Date;
   isRecurring: boolean;
+}
+
+/** Completion belongs to an exact occurrence, not to elapsed calendar time. */
+export function isOccurrenceComplete(occurrence: EventOccurrence): boolean {
+  const occurrenceTime = occurrence.occurrenceStart.getTime();
+  return (occurrence.event.completions ?? []).some(
+    (completion) =>
+      new Date(completion.occurrenceStart).getTime() === occurrenceTime,
+  );
 }
 
 interface ParsedRule {
@@ -55,16 +64,9 @@ export function expandEvent(
 
   // Non-recurring: single occurrence
   if (!event.recurrenceRule || event.recurrenceStatus !== "active") {
-    // Only include if it falls within the visible range
-    if (isBefore(start, rangeStart) || isBefore(rangeEnd, start)) {
-      // Check day-level overlap
-      const dayStart = startOfDay(start);
-      const dayRangeStart = startOfDay(rangeStart);
-      const dayRangeEnd = startOfDay(rangeEnd);
-      if (isBefore(dayStart, dayRangeStart) || isBefore(dayRangeEnd, dayStart)) {
-        return [];
-      }
-    }
+    // Include events that overlap the range, including events that began on
+    // the previous day and continue into the visible day.
+    if (isBefore(end, rangeStart) || isBefore(rangeEnd, start)) return [];
     return [{ event, occurrenceStart: start, occurrenceEnd: end, isRecurring: false }];
   }
 
@@ -86,12 +88,14 @@ export function expandEvent(
     !isBefore(effectiveEnd, cursor) &&
     iterations < MAX_ITERATIONS
   ) {
-    // Only emit if cursor is within [rangeStart, effectiveEnd]
-    if (!isBefore(cursor, rangeStart)) {
+    const occurrenceEnd = new Date(cursor.getTime() + durationMs);
+    // A long recurring occurrence can begin before the range and still be
+    // active inside it, so compare both ends of the occurrence.
+    if (!isBefore(occurrenceEnd, rangeStart)) {
       occurrences.push({
         event,
         occurrenceStart: cursor,
-        occurrenceEnd: new Date(cursor.getTime() + durationMs),
+        occurrenceEnd,
         isRecurring: true,
       });
     }

@@ -11,8 +11,14 @@ export interface EnvConfig {
   vapidPublicKey: string;
   vapidPrivateKey: string;
   vapidSubject: string;
+  googleClientId: string;
+  googleClientSecret: string;
+  googleRedirectUri: string;
+  encryptionKey: string;
+  sessionSecret: string;
   isProduction: boolean;
   isPreview: boolean;
+  isSecureDeployment: boolean;
 }
 
 /**
@@ -28,8 +34,14 @@ export function getEnv(bindings?: Partial<Bindings>): EnvConfig {
     vapidPublicKey: bindings?.VAPID_PUBLIC_KEY ?? "",
     vapidPrivateKey: bindings?.VAPID_PRIVATE_KEY ?? "",
     vapidSubject: bindings?.VAPID_SUBJECT ?? "mailto:push@ember.app",
+    googleClientId: bindings?.GOOGLE_CLIENT_ID ?? "",
+    googleClientSecret: bindings?.GOOGLE_CLIENT_SECRET ?? "",
+    googleRedirectUri: bindings?.GOOGLE_REDIRECT_URI ?? "http://localhost:8787/api/auth/google/callback",
+    encryptionKey: bindings?.ENCRYPTION_KEY ?? "",
+    sessionSecret: bindings?.SESSION_SECRET ?? bindings?.AUTH_SECRET ?? "",
     isProduction: environment === "production",
     isPreview: environment === "preview",
+    isSecureDeployment: environment !== "development",
   };
 }
 

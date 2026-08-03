@@ -1,21 +1,21 @@
 name = "crm-web"
-compatibility_date = "2025-06-01"
+compatibility_date = "2026-08-02"
 compatibility_flags = ["nodejs_compat"]
 pages_build_output_dir = "dist/client"
 
 [vars]
-VITE_API_URL = "https://api.crm.seanleejh.com"
+VITE_API_URL = "https://ember-api.sean-1df.workers.dev"
 
 [env.preview]
 name = "crm-web-preview"
 pages_build_output_dir = "dist/client"
 
 [env.preview.vars]
-VITE_API_URL = "https://crm-api-preview.seanleejh.workers.dev"
+VITE_API_URL = "https://ember-api-preview.seanleejh.workers.dev"
 
 [env.production]
 name = "crm-web"
 pages_build_output_dir = "dist/client"
 
 [env.production.vars]
-VITE_API_URL = "https://api.crm.seanleejh.com"
+VITE_API_URL = "https://ember-api.sean-1df.workers.dev"

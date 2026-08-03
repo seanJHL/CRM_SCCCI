@@ -2,10 +2,10 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "ember-api",
   "main": "src/index.ts",
-  "compatibility_date": "2025-06-01",
+  "compatibility_date": "2026-07-30",
   "compatibility_flags": ["nodejs_compat"],
   "triggers": {
-    "crons": ["0 0 * * *", "*/15 * * * *"]
+    "crons": ["0 0 * * *", "* * * * *"]
   },
   "observability": {
     "enabled": true,
@@ -13,7 +13,8 @@
   },
   "vars": {
     "ENVIRONMENT": "development",
-    "CORS_ORIGIN": "*"
+    "CORS_ORIGIN": "http://localhost:3001",
+    "GOOGLE_REDIRECT_URI": "http://localhost:8787/api/auth/google/callback"
   },
   "env": {
     "preview": {
@@ -24,7 +25,8 @@
       },
       "vars": {
         "ENVIRONMENT": "preview",
-        "CORS_ORIGIN": "https://preview.crm.seanleejh.com"
+        "CORS_ORIGIN": "https://preview.crm.seanleejh.com",
+        "GOOGLE_REDIRECT_URI": "https://ember-api-preview.seanleejh.workers.dev/api/auth/google/callback"
       }
     },
     "production": {
@@ -35,7 +37,8 @@
       },
       "vars": {
         "ENVIRONMENT": "production",
-        "CORS_ORIGIN": "https://crm.seanleejh.com"
+        "CORS_ORIGIN": "https://crm.seanleejh.com,https://ember-mobile-controller.sean-lee-jh.chatgpt.site",
+        "GOOGLE_REDIRECT_URI": "https://ember-api.sean-1df.workers.dev/api/auth/google/callback"
       }
     }
   }

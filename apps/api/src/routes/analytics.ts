@@ -5,8 +5,6 @@ import { createDatabase } from "@/db";
 import {
   events,
   workoutSessions,
-  sessionSets,
-  sessionExerciseLogs,
   habits,
 } from "@/db/schema";
 import { ok } from "@/lib/utils";

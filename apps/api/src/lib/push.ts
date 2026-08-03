@@ -1,4 +1,7 @@
-import webpush from "web-push";
+import {
+  buildPushPayload,
+  type PushSubscription,
+} from "@block65/webcrypto-web-push";
 import { eq } from "drizzle-orm";
 import type { createDatabase } from "@/db";
 import { pushSubscriptions } from "@/db/schema";
@@ -17,22 +20,13 @@ export interface PushPayload {
   badge?: string;
 }
 
-let vapidConfigured = false;
-
 /**
- * Configure VAPID details once per isolate. Safe to call repeatedly.
- * Returns false when VAPID keys are not configured (push disabled).
+ * Returns whether this environment has the keys required for Web Push.
  */
 export function configureVapid(env: EnvConfig): boolean {
-  if (vapidConfigured) return true;
-  if (!env.vapidPublicKey || !env.vapidPrivateKey) return false;
-  webpush.setVapidDetails(
-    env.vapidSubject,
-    env.vapidPublicKey,
-    env.vapidPrivateKey,
+  return Boolean(
+    env.vapidSubject && env.vapidPublicKey && env.vapidPrivateKey,
   );
-  vapidConfigured = true;
-  return true;
 }
 
 /**
@@ -42,27 +36,41 @@ export function configureVapid(env: EnvConfig): boolean {
 export async function sendPush(
   subscription: { endpoint: string; p256dhKey: string; authKey: string },
   payload: PushPayload,
+  env: EnvConfig,
 ): Promise<boolean> {
-  try {
-    await webpush.sendNotification(
-      {
-        endpoint: subscription.endpoint,
-        keys: {
-          p256dh: subscription.p256dhKey,
-          auth: subscription.authKey,
-        },
+  if (!configureVapid(env)) return false;
+
+  const browserSubscription: PushSubscription = {
+    endpoint: subscription.endpoint,
+    expirationTime: null,
+    keys: {
+      p256dh: subscription.p256dhKey,
+      auth: subscription.authKey,
+    },
+  };
+  const request = await buildPushPayload(
+    {
+      data: JSON.stringify(payload),
+      options: {
+        ttl: 60 * 60,
+        urgency: "high",
       },
-      JSON.stringify(payload),
-    );
-    return true;
-  } catch (err) {
-    const status = (err as { statusCode?: number }).statusCode;
-    // 404 / 410 mean the subscription is no longer valid.
-    if (status === 404 || status === 410) {
-      return false;
-    }
-    throw err;
-  }
+    },
+    browserSubscription,
+    {
+      subject: env.vapidSubject,
+      publicKey: env.vapidPublicKey,
+      privateKey: env.vapidPrivateKey,
+    },
+  );
+
+  const response = await fetch(subscription.endpoint, request);
+  if (response.ok) return true;
+
+  // 404 / 410 mean the subscription is no longer valid.
+  if (response.status === 404 || response.status === 410) return false;
+
+  throw new Error(`Push service responded with ${response.status}`);
 }
 
 /**
@@ -76,7 +84,10 @@ export async function broadcastPush(
   payload: PushPayload,
 ): Promise<number> {
   if (!configureVapid(env)) {
-    console.log("[PUSH] VAPID keys not configured — skipping broadcast");
+    console.log(JSON.stringify({
+      message: "Push skipped: VAPID keys are not configured",
+      environment: env.environment,
+    }));
     return 0;
   }
 
@@ -86,7 +97,7 @@ export async function broadcastPush(
   let delivered = 0;
   for (const sub of subs) {
     try {
-      const success = await sendPush(sub, payload);
+      const success = await sendPush(sub, payload, env);
       if (success) {
         delivered += 1;
       } else {
@@ -94,13 +105,24 @@ export async function broadcastPush(
         await db
           .delete(pushSubscriptions)
           .where(eq(pushSubscriptions.id, sub.id));
-        console.log(`[PUSH] Pruned expired subscription ${sub.id}`);
+        console.log(JSON.stringify({
+          message: "Expired push subscription pruned",
+          subscriptionId: sub.id,
+        }));
       }
     } catch (err) {
-      console.error(`[PUSH] Failed to deliver to ${sub.id}:`, err);
+      console.error(JSON.stringify({
+        message: "Push delivery failed",
+        subscriptionId: sub.id,
+        error: err instanceof Error ? err.message : String(err),
+      }));
     }
   }
 
-  console.log(`[PUSH] Broadcast complete: ${delivered}/${subs.length} delivered`);
+  console.log(JSON.stringify({
+    message: "Push broadcast complete",
+    delivered,
+    subscriptions: subs.length,
+  }));
   return delivered;
 }

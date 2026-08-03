@@ -63,8 +63,16 @@ export interface Event {
   tags: string | null;
   link: string | null;
   exercises?: EventExercise[];
+  completions?: EventCompletion[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface EventCompletion {
+  id: string;
+  eventId: string;
+  occurrenceStart: string;
+  completedAt: string;
 }
 
 export interface EventExercise {
@@ -194,7 +202,9 @@ export interface Reminder {
   scheduleType: "interval" | "daily_time";
   intervalMinutes: number | null;
   timeOfDay: string | null;
+  timeZone: string;
   isActive: boolean;
+  lastFiredAt: string | null;
   createdAt: string;
 }
 

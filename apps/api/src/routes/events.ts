@@ -1,9 +1,14 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { eq, gte, lte, and, asc } from "drizzle-orm";
+import { eq, gte, lte, and, asc, or } from "drizzle-orm";
 import type { AppBindings } from "@/types";
 import { createDatabase } from "@/db";
-import { events, eventExercises, exercises } from "@/db/schema";
+import {
+  events,
+  eventCompletions,
+  eventExercises,
+  exercises,
+} from "@/db/schema";
 import { ApiError, ok } from "@/lib/utils";
 import { getEnv } from "@/lib/env";
 
@@ -35,6 +40,17 @@ const eventSchema = z.object({
 const eventUpdateSchema = eventSchema.partial();
 
 const eventsRoute = new Hono<AppBindings>();
+
+async function getEventCompletions(
+  db: ReturnType<typeof createDatabase>,
+  eventId: string,
+) {
+  return db
+    .select()
+    .from(eventCompletions)
+    .where(eq(eventCompletions.eventId, eventId))
+    .orderBy(asc(eventCompletions.occurrenceStart));
+}
 
 // Fetch exercises for a given event
 async function getEventExercises(
@@ -87,10 +103,22 @@ eventsRoute.get("/", async (c) => {
   let query = db.select().from(events);
 
   if (from && to) {
+    const rangeStart = new Date(from);
+    const rangeEnd = new Date(to);
     query = query.where(
-      and(
-        gte(events.startAt, new Date(from)),
-        lte(events.startAt, new Date(to)),
+      or(
+        // One-off and long-running events that overlap the requested range.
+        and(
+          lte(events.startAt, rangeEnd),
+          gte(events.endAt, rangeStart),
+        ),
+        // A recurring series may begin before the visible range. Return the
+        // source event so the client can expand the occurrences it needs.
+        and(
+          eq(events.recurrenceStatus, "active"),
+          lte(events.startAt, rangeEnd),
+          gte(events.recurrenceExpiryAt, rangeStart),
+        ),
       ),
     ) as typeof query;
   }
@@ -102,6 +130,7 @@ eventsRoute.get("/", async (c) => {
     rows.map(async (event) => ({
       ...event,
       exercises: await getEventExercises(db, event.id),
+      completions: await getEventCompletions(db, event.id),
     })),
   );
   return c.json(ok(result));
@@ -115,7 +144,8 @@ eventsRoute.get("/:id", async (c) => {
   const [row] = await db.select().from(events).where(eq(events.id, id));
   if (!row) throw ApiError.notFound(`Event ${id} not found`);
   const exs = await getEventExercises(db, id);
-  return c.json(ok({ ...row, exercises: exs }));
+  const completions = await getEventCompletions(db, id);
+  return c.json(ok({ ...row, exercises: exs, completions }));
 });
 
 // Create an event
@@ -158,7 +188,10 @@ eventsRoute.post("/", async (c) => {
   }
 
   const exs = await getEventExercises(db, created.id);
-  return c.json(ok({ ...created, exercises: exs }, "Event created"), 201);
+  return c.json(
+    ok({ ...created, exercises: exs, completions: [] }, "Event created"),
+    201,
+  );
 });
 
 // Update an event
@@ -172,7 +205,10 @@ eventsRoute.patch("/:id", async (c) => {
   if (body.title !== undefined) updates.title = body.title;
   if (body.description !== undefined)
     updates.description = body.description || null;
-  if (body.startAt !== undefined) updates.startAt = new Date(body.startAt);
+  if (body.startAt !== undefined) {
+    updates.startAt = new Date(body.startAt);
+    updates.lastNotifiedAt = null;
+  }
   if (body.endAt !== undefined) updates.endAt = new Date(body.endAt);
   if (body.isAllDay !== undefined) updates.isAllDay = body.isAllDay;
   if (body.color !== undefined) updates.color = body.color || null;
@@ -208,7 +244,49 @@ eventsRoute.patch("/:id", async (c) => {
   }
 
   const exs = await getEventExercises(db, id);
-  return c.json(ok({ ...updated, exercises: exs }, "Event updated"));
+  const completions = await getEventCompletions(db, id);
+  return c.json(ok({ ...updated, exercises: exs, completions }, "Event updated"));
+});
+
+// Toggle one concrete occurrence. Recurring series therefore retain an
+// independent done state for every date on which they appear.
+eventsRoute.post("/:id/completions/toggle", async (c) => {
+  const env = getEnv(c.env);
+  const db = createDatabase(env.databaseUrl);
+  const eventId = c.req.param("id");
+  const body = z
+    .object({ occurrenceStart: z.string().datetime() })
+    .parse(await c.req.json());
+  const occurrenceStart = new Date(body.occurrenceStart);
+
+  const [event] = await db
+    .select({ id: events.id })
+    .from(events)
+    .where(eq(events.id, eventId));
+  if (!event) throw ApiError.notFound(`Event ${eventId} not found`);
+
+  const [existing] = await db
+    .select()
+    .from(eventCompletions)
+    .where(
+      and(
+        eq(eventCompletions.eventId, eventId),
+        eq(eventCompletions.occurrenceStart, occurrenceStart),
+      ),
+    );
+
+  if (existing) {
+    await db
+      .delete(eventCompletions)
+      .where(eq(eventCompletions.id, existing.id));
+    return c.json(ok({ completed: false }, "Event occurrence reopened"));
+  }
+
+  const [completion] = await db
+    .insert(eventCompletions)
+    .values({ eventId, occurrenceStart })
+    .returning();
+  return c.json(ok({ completed: true, completion }, "Event occurrence completed"), 201);
 });
 
 // Delete an event

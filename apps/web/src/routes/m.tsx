@@ -1,6 +1,9 @@
-import { createFileRoute, Outlet } from "@tanstack/react-router";
+import {
+  createFileRoute,
+  Outlet,
+  useRouterState,
+} from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Plus } from "lucide-react";
 import "@/styles/mobile.css";
 import { BottomNav } from "@/components/mobile/bottom-nav";
 import {
@@ -8,7 +11,7 @@ import {
   type QuickCaptureRequest,
 } from "@/components/mobile/quick-action-sheet";
 import { NotificationBanner } from "@/components/mobile/notification-banner";
-import { getServiceWorkerRegistration } from "@/lib/push";
+import { registerServiceWorker, syncPushSubscription } from "@/lib/push";
 
 export const Route = createFileRoute("/m")({
   component: MobileShell,
@@ -16,15 +19,18 @@ export const Route = createFileRoute("/m")({
 
 /**
  * MobileShell — wraps every /m/* screen with the shadcn monochrome theme,
- * bottom tab strip, a floating action button, and the in-app notification layer.
+ * bottom tab strip and the in-app notification layer.
  */
 function MobileShell() {
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const isLiveWorkout = /^\/m\/workouts\/[^/]+$/.test(pathname);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [captureRequest, setCaptureRequest] =
     useState<QuickCaptureRequest>();
 
   useEffect(() => {
-    void getServiceWorkerRegistration();
+    void registerServiceWorker();
+    void syncPushSubscription();
   }, []);
 
   useEffect(() => {
@@ -38,32 +44,17 @@ function MobileShell() {
       window.removeEventListener("ember:quick-capture", openCapture);
   }, []);
 
-  const openDefaultCapture = () => {
-    setCaptureRequest({});
-    setSheetOpen(true);
-  };
-
   return (
     <div className="m-app flex min-h-dvh flex-col">
       <NotificationBanner />
 
       <main
-        className="m-page-shell mx-auto w-full max-w-lg flex-1"
+        className={`m-page-shell mx-auto w-full max-w-lg flex-1${isLiveWorkout ? " is-live-workout" : ""}`}
       >
         <Outlet />
       </main>
 
-      <button
-        onClick={openDefaultCapture}
-        aria-label="Quick add to calendar"
-        aria-haspopup="dialog"
-        aria-expanded={sheetOpen}
-        className={sheetOpen ? "hidden" : "m-fab m-press"}
-      >
-        <Plus width={23} height={23} strokeWidth={2.5} />
-      </button>
-
-      <BottomNav />
+      {!isLiveWorkout && <BottomNav />}
       <QuickActionSheet
         open={sheetOpen}
         request={captureRequest}

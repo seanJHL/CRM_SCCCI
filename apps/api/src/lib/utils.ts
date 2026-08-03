@@ -37,6 +37,10 @@ export class ApiError extends Error {
     return new ApiError(403, "FORBIDDEN", message);
   }
 
+  static conflict(message: string, details?: unknown) {
+    return new ApiError(409, "CONFLICT", message, details);
+  }
+
   static internal(message = "Internal server error") {
     return new ApiError(500, "INTERNAL_ERROR", message);
   }

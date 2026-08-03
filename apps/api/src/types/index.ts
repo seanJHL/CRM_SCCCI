@@ -16,6 +16,30 @@ export interface Bindings {
   VAPID_PRIVATE_KEY: string;
   /** Contact mailto: for VAPID subject (e.g. mailto:you@example.com) */
   VAPID_SUBJECT?: string;
+  /** Google OAuth 2.0 client ID */
+  GOOGLE_CLIENT_ID: string;
+  /** Google OAuth 2.0 client secret (secret) */
+  GOOGLE_CLIENT_SECRET: string;
+  /** Google OAuth 2.0 redirect URI (e.g. http://localhost:8787/api/auth/google/callback) */
+  GOOGLE_REDIRECT_URI: string;
+  /** 32-byte base64 key for AES-GCM token encryption (secret) */
+  ENCRYPTION_KEY: string;
+  /** Secret for hashing session tokens (secret) */
+  SESSION_SECRET: string;
+}
+
+/**
+ * Authenticated user attached to the Hono context by the session middleware.
+ * Subset of the users table — no sensitive fields.
+ */
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  avatarUrl: string | null;
+  timezone: string;
+  workingHoursStart: string;
+  workingHoursEnd: string;
 }
 
 /**
@@ -23,6 +47,10 @@ export interface Bindings {
  */
 export interface Variables {
   requestId: string;
+  /** Authenticated user (set by authMiddleware) */
+  user: AuthUser;
+  /** User ID shortcut (set by authMiddleware) */
+  userId: string;
 }
 
 export type AppBindings = {

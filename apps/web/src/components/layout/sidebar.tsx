@@ -3,12 +3,12 @@ import { useState } from "react";
 import {
   CalendarDays,
   Bell,
-  Settings,
   PanelLeftClose,
   PanelLeft,
   Zap,
   CircleDot,
   CheckCircle2,
+  Smartphone,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -17,7 +17,7 @@ const navItems = [
   { to: "/", label: "Calendar", icon: CalendarDays },
   { to: "/workouts", label: "Habits", icon: CheckCircle2 },
   { to: "/reminders", label: "Reminders", icon: Bell },
-  { to: "/settings", label: "Settings", icon: Settings },
+  { to: "/m", label: "Mobile view", icon: Smartphone },
 ];
 
 export function Sidebar() {

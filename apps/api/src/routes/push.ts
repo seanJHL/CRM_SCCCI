@@ -6,13 +6,16 @@ import { createDatabase } from "@/db";
 import { pushSubscriptions } from "@/db/schema";
 import { ApiError, ok } from "@/lib/utils";
 import { getEnv } from "@/lib/env";
-import { broadcastPush, configureVapid } from "@/lib/push";
+import { configureVapid, sendPush } from "@/lib/push";
 
 /**
  * Shape produced by PushSubscription.toJSON() on the client.
  */
 const subscriptionSchema = z.object({
-  endpoint: z.string().min(1),
+  endpoint: z.string().url().max(2048).refine(
+    (value) => value.startsWith("https://"),
+    "Push endpoint must use HTTPS",
+  ),
   expirationTime: z.number().nullable().optional(),
   keys: z.object({
     p256dh: z.string().min(1),
@@ -26,8 +29,10 @@ const subscribeSchema = z.object({
 });
 
 const unsubscribeSchema = z.object({
-  endpoint: z.string().min(1),
+  endpoint: subscriptionSchema.shape.endpoint,
 });
+
+const testSchema = unsubscribeSchema;
 
 const pushRoute = new Hono<AppBindings>();
 
@@ -37,6 +42,7 @@ pushRoute.get("/vapid-public-key", (c) => {
   if (!env.vapidPublicKey) {
     throw ApiError.internal("VAPID public key is not configured");
   }
+  c.header("cache-control", "public, max-age=3600");
   return c.json(ok({ publicKey: env.vapidPublicKey }));
 });
 
@@ -89,25 +95,40 @@ pushRoute.post("/unsubscribe", async (c) => {
   return c.json(ok(null, "Subscription removed"));
 });
 
-// Send a test push to all subscriptions (useful for verifying setup).
+// Send a test push only to the requesting browser's exact endpoint.
 pushRoute.post("/test", async (c) => {
   const env = getEnv(c.env);
   const db = createDatabase(env.databaseUrl);
+  const body = testSchema.parse(await c.req.json());
 
   if (!configureVapid(env)) {
     throw ApiError.internal("VAPID keys are not configured");
   }
 
-  const delivered = await broadcastPush(db, env, {
+  const [subscription] = await db
+    .select()
+    .from(pushSubscriptions)
+    .where(eq(pushSubscriptions.endpoint, body.endpoint));
+  if (!subscription) {
+    throw ApiError.notFound("Push subscription is not registered");
+  }
+
+  const delivered = await sendPush(subscription, {
     title: "Ember 🔥",
     body: "Push notifications are working! You're all set.",
     url: "/m",
     tag: "ember-test",
     icon: "/icons/ember-192.png",
     badge: "/icons/ember-192.png",
-  });
+  }, env);
 
-  return c.json(ok({ delivered }, "Test push dispatched"));
+  if (!delivered) {
+    await db
+      .delete(pushSubscriptions)
+      .where(eq(pushSubscriptions.id, subscription.id));
+  }
+
+  return c.json(ok({ delivered }, delivered ? "Test push dispatched" : "Subscription expired"));
 });
 
 export default pushRoute;

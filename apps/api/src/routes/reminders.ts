@@ -7,11 +7,26 @@ import { reminders } from "@/db/schema";
 import { ApiError, ok } from "@/lib/utils";
 import { getEnv } from "@/lib/env";
 
+const timeOfDaySchema = z.string().regex(
+  /^(?:[01]\d|2[0-3]):[0-5]\d$/,
+  "timeOfDay must be a valid 24-hour HH:mm value",
+);
+
+const timeZoneSchema = z.string().min(1).max(100).refine((value) => {
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: value }).format();
+    return true;
+  } catch {
+    return false;
+  }
+}, "timeZone must be a valid IANA time zone");
+
 const reminderSchema = z.object({
   name: z.string().min(1).max(200),
   scheduleType: z.enum(["interval", "daily_time"]),
   intervalMinutes: z.number().int().min(1).optional(),
-  timeOfDay: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  timeOfDay: timeOfDaySchema.optional(),
+  timeZone: timeZoneSchema.optional(),
   isActive: z.boolean().optional(),
 });
 
@@ -58,6 +73,7 @@ remindersRoute.post("/", async (c) => {
       scheduleType: body.scheduleType,
       intervalMinutes: body.intervalMinutes ?? null,
       timeOfDay: body.timeOfDay ?? null,
+      timeZone: body.timeZone ?? "Asia/Singapore",
       isActive: body.isActive ?? true,
     })
     .returning();
@@ -79,6 +95,7 @@ remindersRoute.patch("/:id", async (c) => {
     updates.intervalMinutes = body.intervalMinutes ?? null;
   if (body.timeOfDay !== undefined)
     updates.timeOfDay = body.timeOfDay ?? null;
+  if (body.timeZone !== undefined) updates.timeZone = body.timeZone;
   if (body.isActive !== undefined) updates.isActive = body.isActive;
 
   const [updated] = await db
@@ -104,7 +121,10 @@ remindersRoute.post("/:id/toggle", async (c) => {
 
   const [updated] = await db
     .update(reminders)
-    .set({ isActive: !reminder.isActive })
+    .set({
+      isActive: !reminder.isActive,
+      lastFiredAt: reminder.isActive ? reminder.lastFiredAt : null,
+    })
     .where(eq(reminders.id, id))
     .returning();
   return c.json(ok(updated, `Reminder ${updated.isActive ? "activated" : "deactivated"}`));

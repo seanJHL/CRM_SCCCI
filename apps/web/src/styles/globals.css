@@ -62,6 +62,50 @@
   ::-webkit-scrollbar-thumb:hover {
     background: hsl(0 0% 65%);
   }
+
+  .mobile-route-handoff {
+    display: none;
+  }
+
+  @media (max-width: 820px) {
+    html:not([data-ember-desktop-view="true"]) .desktop-app-shell {
+      display: none;
+    }
+
+    html:not([data-ember-desktop-view="true"]) .mobile-route-handoff {
+      display: flex;
+      min-height: 100dvh;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      background: #f6f6f4;
+      color: #666662;
+      font-size: 0.8125rem;
+    }
+
+    .mobile-route-handoff__mark {
+      display: grid;
+      width: 2.75rem;
+      height: 2.75rem;
+      place-items: center;
+      border-radius: 0.875rem;
+      background: #111110;
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 700;
+      box-shadow: 0 10px 24px rgb(17 17 16 / 16%);
+    }
+
+    .mobile-route-handoff a {
+      min-height: 2.75rem;
+      padding: 0.75rem 1rem;
+      color: #111110;
+      font-weight: 600;
+      text-decoration: underline;
+      text-underline-offset: 0.2em;
+    }
+  }
 }
 
 @layer components {

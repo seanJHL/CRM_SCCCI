@@ -548,6 +548,53 @@ workoutsRoute.post(
   },
 );
 
+// Edit a completed or planned set
+workoutsRoute.patch(
+  "/sessions/:sessionId/logs/:logId/sets/:setId",
+  async (c) => {
+    const env = getEnv(c.env);
+    const db = createDatabase(env.databaseUrl);
+    const sessionId = c.req.param("sessionId");
+    const logId = c.req.param("logId");
+    const setId = c.req.param("setId");
+    const body = setLogSchema.parse(await c.req.json());
+
+    const [log] = await db
+      .select({ id: sessionExerciseLogs.id })
+      .from(sessionExerciseLogs)
+      .where(
+        and(
+          eq(sessionExerciseLogs.id, logId),
+          eq(sessionExerciseLogs.sessionId, sessionId),
+        ),
+      );
+    if (!log) throw ApiError.notFound(`Exercise log ${logId} not found`);
+
+    const [updated] = await db
+      .update(sessionSets)
+      .set({
+        ...(body.weight !== undefined ? { weight: body.weight } : {}),
+        ...(body.reps !== undefined ? { reps: body.reps } : {}),
+        ...(body.distanceKm !== undefined
+          ? { distanceKm: body.distanceKm }
+          : {}),
+        ...(body.durationMinutes !== undefined
+          ? { durationMinutes: body.durationMinutes }
+          : {}),
+      })
+      .where(
+        and(
+          eq(sessionSets.id, setId),
+          eq(sessionSets.sessionExerciseLogId, logId),
+        ),
+      )
+      .returning();
+    if (!updated) throw ApiError.notFound(`Set ${setId} not found`);
+
+    return c.json(ok(updated, "Set updated"));
+  },
+);
+
 // Finish a session
 workoutsRoute.post("/sessions/:id/finish", async (c) => {
   const env = getEnv(c.env);

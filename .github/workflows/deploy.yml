@@ -45,7 +45,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: apps/api
-          wranglerVersion: "3.99.0"
+          wranglerVersion: "4.118.0"
           command: deploy --env production
 
   deploy-web:
@@ -86,6 +86,6 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: apps/web
-          wranglerVersion: "3.99.0"
+          wranglerVersion: "4.118.0"
           command: pages deploy dist/client --project-name=crm-web --branch=main
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}

@@ -116,6 +116,8 @@ function RemindersPage() {
       scheduleType,
       intervalMinutes: scheduleType === "interval" ? intervalMinutes : undefined,
       timeOfDay: scheduleType === "daily_time" ? timeOfDay : undefined,
+      timeZone:
+        Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Singapore",
     });
   }
 

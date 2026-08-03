@@ -62,7 +62,7 @@ function MobileHabits() {
   };
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="m-controller-page flex flex-col gap-5">
       <header className="m-anim-slide-up">
         <p className="m-eyebrow">Daily habits</p>
         <h1 className="mt-1 text-[28px] font-semibold tracking-tight text-[var(--m-text)]">

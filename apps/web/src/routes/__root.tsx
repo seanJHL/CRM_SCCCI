@@ -6,11 +6,134 @@ import {
   useRouterState,
 } from "@tanstack/react-router";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { Sidebar } from "@/components/layout/sidebar";
 import "@/styles/globals.css";
 
 interface RouterContext {
   queryClient: QueryClient;
+}
+
+const MOBILE_VIEW_QUERY = "(max-width: 820px)";
+const DESKTOP_VIEW_KEY = "ember:desktop-view";
+
+function getMobileDestination(pathname: string) {
+  if (pathname === "/reminders" || pathname.startsWith("/reminders/")) {
+    return "/m/reminders";
+  }
+  if (pathname === "/planner" || pathname.startsWith("/planner/")) {
+    return "/m/calendar";
+  }
+  if (
+    pathname === "/workouts" ||
+    pathname.startsWith("/workouts/") ||
+    pathname === "/workout" ||
+    pathname.startsWith("/workout/")
+  ) {
+    return "/m/workouts";
+  }
+  return "/m";
+}
+
+/**
+ * The browser's mobile layout and the installed PWA deliberately share the
+ * exact same /m routes. This keeps the responsive browser preview from
+ * drifting away from the experience people install on their home screen.
+ */
+function MobileViewportRedirect({
+  pathname,
+  isMobileRoute,
+  disabled,
+}: {
+  pathname: string;
+  isMobileRoute: boolean;
+  disabled: boolean;
+}) {
+  useEffect(() => {
+    const root = document.documentElement;
+
+    if (disabled) {
+      delete root.dataset.emberDesktopView;
+      return;
+    }
+
+    if (isMobileRoute) {
+      try {
+        window.sessionStorage.removeItem(DESKTOP_VIEW_KEY);
+      } catch {
+        // Storage can be unavailable in privacy-restricted browser contexts.
+      }
+      delete root.dataset.emberDesktopView;
+      return;
+    }
+
+    const searchParams = new URLSearchParams(window.location.search);
+    const requestedDesktop = searchParams.get("desktop") === "1";
+    let desktopOverride = requestedDesktop;
+
+    try {
+      if (requestedDesktop) {
+        window.sessionStorage.setItem(DESKTOP_VIEW_KEY, "1");
+      } else {
+        desktopOverride =
+          window.sessionStorage.getItem(DESKTOP_VIEW_KEY) === "1";
+      }
+    } catch {
+      // The query-string override still works when session storage is blocked.
+    }
+
+    if (desktopOverride) {
+      root.dataset.emberDesktopView = "true";
+      return () => {
+        delete root.dataset.emberDesktopView;
+      };
+    }
+
+    delete root.dataset.emberDesktopView;
+    const narrowViewport = window.matchMedia(MOBILE_VIEW_QUERY);
+    const standaloneDisplay = window.matchMedia("(display-mode: standalone)");
+    const iosStandalone =
+      (window.navigator as Navigator & { standalone?: boolean }).standalone ===
+      true;
+    let redirecting = false;
+
+    const openMobileView = () => {
+      if (
+        redirecting ||
+        (!narrowViewport.matches &&
+          !standaloneDisplay.matches &&
+          !iosStandalone)
+      ) {
+        return;
+      }
+
+      redirecting = true;
+      const destination = new URL(
+        getMobileDestination(pathname),
+        window.location.origin,
+      );
+      searchParams.delete("desktop");
+      searchParams.forEach((value, key) => {
+        destination.searchParams.append(key, value);
+      });
+      destination.hash = window.location.hash;
+      window.location.replace(
+        `${destination.pathname}${destination.search}${destination.hash}`,
+      );
+    };
+
+    openMobileView();
+    narrowViewport.addEventListener("change", openMobileView);
+    standaloneDisplay.addEventListener("change", openMobileView);
+
+    return () => {
+      narrowViewport.removeEventListener("change", openMobileView);
+      standaloneDisplay.removeEventListener("change", openMobileView);
+      delete root.dataset.emberDesktopView;
+    };
+  }, [disabled, isMobileRoute, pathname]);
+
+  return null;
 }
 
 export const Route = createRootRouteWithContext<RouterContext>()({
@@ -21,7 +144,7 @@ export const Route = createRootRouteWithContext<RouterContext>()({
         name: "viewport",
         content: "width=device-width, initial-scale=1, viewport-fit=cover",
       },
-      { title: "Ember" },
+      { title: "SCCCI CRM" },
       {
         name: "description",
         content:
@@ -49,9 +172,9 @@ export const Route = createRootRouteWithContext<RouterContext>()({
         name: "twitter:image",
         content: "https://crm.seanleejh.com/og.png",
       },
-      { name: "theme-color", content: "#ffffff" },
+      { name: "theme-color", content: "#1d2429" },
       { name: "apple-mobile-web-app-capable", content: "yes" },
-      { name: "apple-mobile-web-app-status-bar-style", content: "default" },
+      { name: "apple-mobile-web-app-status-bar-style", content: "black-translucent" },
       { name: "apple-mobile-web-app-title", content: "Ember" },
     ],
     links: [
@@ -70,27 +193,49 @@ function RootComponent() {
     select: (state) => state.location.pathname,
   });
   const isMobileRoute = pathname === "/m" || pathname.startsWith("/m/");
+  const isCrmExperience =
+    pathname === "/crm" ||
+    pathname === "/login" ||
+    pathname === "/privacy-policy";
 
   return (
-    <html lang="en">
+    <html lang="en" className={isMobileRoute ? "ember-mobile-active" : undefined}>
       <head>
         <HeadContent />
       </head>
-      <body>
+      <body className={isMobileRoute ? "ember-mobile-active" : undefined}>
         <QueryClientProvider client={queryClient}>
+          <MobileViewportRedirect
+            pathname={pathname}
+            isMobileRoute={isMobileRoute}
+            disabled={isCrmExperience}
+          />
           {isMobileRoute ? (
-            <main className="min-h-screen bg-background">
+            <main className="min-h-screen bg-[#151b1f]">
+              <Outlet />
+            </main>
+          ) : isCrmExperience ? (
+            <main className="min-h-screen bg-[#f5f7f6]">
               <Outlet />
             </main>
           ) : (
-            <div className="flex min-h-screen bg-background">
-              <Sidebar />
-              <main className="flex-1 overflow-auto">
-                <div className="w-full">
-                  <Outlet />
-                </div>
-              </main>
-            </div>
+            <>
+              <div className="desktop-app-shell flex min-h-screen bg-background">
+                <Sidebar />
+                <main className="flex-1 overflow-auto">
+                  <div className="w-full">
+                    <Outlet />
+                  </div>
+                </main>
+              </div>
+              <div className="mobile-route-handoff" role="status">
+                <span className="mobile-route-handoff__mark" aria-hidden="true">
+                  E
+                </span>
+                <span>Opening your mobile controls…</span>
+                <a href="/m">Open now</a>
+              </div>
+            </>
           )}
         </QueryClientProvider>
         <Scripts />

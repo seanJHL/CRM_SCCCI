@@ -37,3 +37,21 @@ describe("CORS headers", () => {
     expect(res.headers.get("access-control-allow-origin")).toBeTruthy();
   });
 });
+
+describe("CRM route protection", () => {
+  it("rejects unauthenticated Gmail access", async () => {
+    const res = await app.request("/api/gmail");
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.error.code).toBe("UNAUTHORIZED");
+  });
+
+  it("rejects unauthenticated Calendar and privacy access", async () => {
+    const [calendar, privacy] = await Promise.all([
+      app.request("/api/calendar-crm/events"),
+      app.request("/api/privacy/data-access"),
+    ]);
+    expect(calendar.status).toBe(401);
+    expect(privacy.status).toBe(401);
+  });
+});

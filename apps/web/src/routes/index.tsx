@@ -10,10 +10,12 @@ import {
   addDays,
   addMonths,
   addWeeks,
+  endOfDay,
   format,
   getDaysInMonth,
   isSameDay,
   isSameMonth,
+  startOfDay,
   startOfMonth,
   startOfWeek,
   subDays,
@@ -58,7 +60,6 @@ export const Route = createFileRoute("/")({
   component: CalendarHomePage,
 });
 
-const REFERENCE_DATE = new Date(2026, 6, 29);
 const WEEKDAYS = {
   0: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
   1: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
@@ -67,18 +68,19 @@ const completionDateKey = (completion: HabitCompletion) =>
   new Date(completion.completedAt).toISOString().slice(0, 10);
 
 function CalendarHomePage() {
+  const [today] = useState(() => startOfDay(new Date()));
   const {
     preferences,
     ready: preferencesReady,
   } = useAppPreferences();
-  const [currentDate, setCurrentDate] = useState(REFERENCE_DATE);
-  const [selectedDate, setSelectedDate] = useState(REFERENCE_DATE);
+  const [currentDate, setCurrentDate] = useState(today);
+  const [selectedDate, setSelectedDate] = useState(today);
   const [view, setView] = useState<"month" | "week" | "day">("month");
   const [preferencesApplied, setPreferencesApplied] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState<Event | null>(null);
-  const [dialogDate, setDialogDate] = useState<Date>(REFERENCE_DATE);
+  const [dialogDate, setDialogDate] = useState<Date>(today);
 
   useEffect(() => {
     if (!preferencesReady || preferencesApplied) return;
@@ -116,15 +118,19 @@ function CalendarHomePage() {
 
   const fromStr = format(calendarDays[0], "yyyy-MM-dd");
   const toStr = format(calendarDays[calendarDays.length - 1], "yyyy-MM-dd");
+  const eventRangeStart = startOfDay(calendarDays[0]);
+  const eventRangeEnd = endOfDay(calendarDays[calendarDays.length - 1]);
 
   const { data: events, isLoading: eventsLoading } = useQuery({
     queryKey: queryKeys.events.range(fromStr, toStr),
     queryFn: () =>
       api.get<Event[]>(
-        `/api/events?from=${fromStr}T00:00:00Z&to=${toStr}T23:59:59Z`,
+        `/api/events?from=${eventRangeStart.toISOString()}&to=${eventRangeEnd.toISOString()}`,
       ),
     staleTime: 60_000,
     gcTime: 600_000,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
   });
 
   const { data: habits, isLoading: habitsLoading } = useQuery({
@@ -336,7 +342,7 @@ function CalendarHomePage() {
           </span>
           <span className="h-5 w-px bg-[#d9dce2]" />
           <span className="text-[12px] font-medium uppercase tracking-[0.04em] text-[#667085]">
-            {format(REFERENCE_DATE, "EEE d MMM yyyy")}
+            {format(today, "EEE d MMM yyyy")}
           </span>
         </div>
 
@@ -648,7 +654,7 @@ function CalendarHomePage() {
               <div className="mb-6">
                 <div className="mb-2 flex items-center justify-between">
                   <h2 className="text-[12px] font-semibold text-[#202124]">
-                    {isSameDay(selectedDate, REFERENCE_DATE)
+                    {isSameDay(selectedDate, today)
                       ? "Today's schedule"
                       : `Schedule · ${format(selectedDate, "d MMM")}`}
                   </h2>
@@ -741,7 +747,7 @@ function CalendarHomePage() {
               <div className="mb-6">
                 <div className="mb-1 flex items-center justify-between">
                   <h2 className="text-[12px] font-semibold text-[#202124]">
-                    {isSameDay(selectedDate, REFERENCE_DATE)
+                    {isSameDay(selectedDate, today)
                       ? "Today's habits"
                       : `Habits · ${format(selectedDate, "d MMM")}`}
                   </h2>
