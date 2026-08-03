@@ -353,7 +353,7 @@ export function CrmDashboard({ initialSession }: { initialSession: SessionData }
           )}
       </main>
 
-      {composerOpen && selectedThread && (
+      {selectedThread && (
         <ComposerDialog
           mode="reply"
           open={composerOpen}

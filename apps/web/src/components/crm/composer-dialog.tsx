@@ -15,6 +15,7 @@ import {
   type AvailabilityResult,
   type EmailThread,
   errorMessage,
+  googleSignInUrl,
   type ParsedSchedule,
   type SessionData,
   type SuggestedReply,
@@ -306,7 +307,7 @@ export function ComposerDialog(props: ComposerDialogProps) {
             {Boolean(composerError) && (
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900" role="alert">
                 <span>{errorMessage(composerError)}</span>
-                {composerError instanceof ApiClientError && ["GOOGLE_REAUTH_REQUIRED", "GOOGLE_PERMISSION_REQUIRED"].includes(composerError.code) && <a href="/api/auth/google" className="font-semibold underline">Reconnect Google</a>}
+                {composerError instanceof ApiClientError && ["GOOGLE_REAUTH_REQUIRED", "GOOGLE_PERMISSION_REQUIRED"].includes(composerError.code) && <a href={googleSignInUrl()} className="font-semibold underline">Reconnect Google</a>}
                 {composerError instanceof ApiClientError && composerError.code === "UNAUTHORIZED" && <a href="/login" className="font-semibold underline">Sign in again</a>}
               </div>
             )}
