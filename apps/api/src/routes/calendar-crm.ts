@@ -11,8 +11,6 @@ import type { AppBindings } from "@/types";
 import { createDatabase } from "@/db";
 import {
   calendarBookings,
-  emailThreads,
-  meetingRequests,
 } from "@/db/schema";
 import { ApiError, ok } from "@/lib/utils";
 import { getEnv } from "@/lib/env";
@@ -22,7 +20,6 @@ import {
 } from "@/lib/google-oauth";
 import {
   calendarListEvents,
-  calendarCreateEvent,
   calendarUpdateEvent,
   calendarDeleteEvent,
 } from "@/lib/google-api";
@@ -34,6 +31,7 @@ import {
 } from "@/lib/scheduler";
 import { logAction, AuditAction } from "@/lib/audit";
 import { syncCrmBookingsToEmberCalendar } from "@/lib/calendar-sync";
+import { createCalendarBooking } from "@/lib/booking";
 
 const calendarCrmRoute = new Hono<AppBindings>();
 
@@ -212,149 +210,9 @@ calendarCrmRoute.post("/events", async (c) => {
   const userId = c.get("userId");
   const input = createEventSchema.parse(await c.req.json());
 
-  // Duplicate prevention: check for existing booking with overlapping time
-  const start = new Date(input.start);
-  const end = new Date(input.end);
-  let sourceContext: { subject: string | null; snippet: string | null } | null = null;
-  if (input.sourceThreadId) {
-    const [sourceThread] = await db
-      .select({
-        id: emailThreads.id,
-        subject: emailThreads.subject,
-        snippet: emailThreads.snippet,
-      })
-      .from(emailThreads)
-      .where(
-        and(
-          eq(emailThreads.id, input.sourceThreadId),
-          eq(emailThreads.userId, userId),
-        ),
-      );
-    if (!sourceThread) {
-      throw ApiError.badRequest("The source email thread was not found");
-    }
-    sourceContext = sourceThread;
-  }
-  const existing = await db
-    .select()
-    .from(calendarBookings)
-    .where(
-      and(
-        eq(calendarBookings.userId, userId),
-        eq(calendarBookings.status, "confirmed"),
-        sql`${calendarBookings.startAt} < ${end.toISOString()}`,
-        sql`${calendarBookings.endAt} > ${start.toISOString()}`,
-      ),
-    );
+  const result = await createCalendarBooking(db, env, userId, c.get("user"), input);
 
-  if (existing.length > 0) {
-    throw ApiError.conflict("A confirmed CRM booking overlaps this time", {
-      existingBooking: existing[0],
-    });
-  }
-
-  // Re-check Google immediately before creation to avoid a race between slot
-  // recommendation and the user's confirmation.
-  const accessToken = await getValidAccessToken(db, env, userId, [
-    GOOGLE_SCOPE.CALENDAR_EVENTS,
-    GOOGLE_SCOPE.CALENDAR_AVAILABILITY,
-  ]);
-  const availability = await checkAvailability(
-    accessToken,
-    input.start,
-    input.end,
-    c.get("user").timezone,
-    {
-      start: c.get("user").workingHoursStart,
-      end: c.get("user").workingHoursEnd,
-    },
-    input.attendees?.map((attendee) => attendee.email),
-  );
-  if (!availability.available) {
-    const outsideHoursOnly =
-      availability.conflicts.length === 0 && !availability.withinWorkingHours;
-    if (!(outsideHoursOnly && input.allowOutsideWorkingHours)) {
-      throw ApiError.conflict(
-        `The selected time is no longer available: ${availability.reason}`,
-        availability,
-      );
-    }
-  }
-
-  // Create via Google Calendar only after confirmed=true was validated.
-  const description =
-    input.description ??
-    (sourceContext
-      ? `Scheduled from Gmail thread: ${sourceContext.subject ?? "Untitled conversation"}\n\nEmail context: ${sourceContext.snippet ?? ""}`
-      : undefined);
-  const result = await calendarCreateEvent(accessToken, {
-    summary: input.title,
-    description,
-    location: input.location,
-    start: input.start,
-    end: input.end,
-    attendees: input.attendees,
-    addMeetLink: input.addMeetLink,
-    sourceThreadId: input.sourceThreadId,
-  });
-
-  // Store in DB for tracking
-  const [booking] = await db
-    .insert(calendarBookings)
-    .values({
-      userId,
-      googleEventId: result.id,
-      title: input.title,
-      description: description ?? null,
-      startAt: start,
-      endAt: end,
-      attendees: input.attendees ?? null,
-      meetLink: result.hangoutLink,
-      location: input.location ?? null,
-      sourceThreadId: input.sourceThreadId ?? null,
-      status: "confirmed",
-    })
-    .returning();
-
-  // Ember Calendar is the canonical in-app calendar. This upsert uses the CRM
-  // booking id as its idempotency key, so retries never duplicate meetings.
-  await syncCrmBookingsToEmberCalendar(db, userId);
-
-  if (input.sourceThreadId) {
-    await db
-      .update(emailThreads)
-      .set({ status: "scheduled", updatedAt: new Date() })
-      .where(
-        and(
-          eq(emailThreads.id, input.sourceThreadId),
-          eq(emailThreads.userId, userId),
-        ),
-      );
-    await db
-      .update(meetingRequests)
-      .set({
-        status: "booked",
-        parsedStart: start,
-        parsedEnd: end,
-      })
-      .where(
-        and(
-          eq(meetingRequests.threadId, input.sourceThreadId),
-          eq(meetingRequests.userId, userId),
-        ),
-      );
-  }
-
-  // Audit log
-  await logAction(db, userId, AuditAction.CALENDAR_CREATE, "calendar_booking", booking.id, {
-    title: input.title,
-    start: input.start,
-    end: input.end,
-    googleEventId: result.id,
-    meetLink: result.hangoutLink,
-  });
-
-  return c.json(ok({ booking, googleEventId: result.id, htmlLink: result.htmlLink }));
+  return c.json(ok(result));
 });
 
 // --- PATCH /events/:id — update calendar event ---
