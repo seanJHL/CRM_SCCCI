@@ -17,6 +17,7 @@ import {
   errorMessage,
   googleSignInUrl,
   type ParsedSchedule,
+  type SendMessageResult,
   type SessionData,
   type SuggestedReply,
   type SuggestedSlot,
@@ -36,20 +37,37 @@ import {
 } from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
 
-interface ComposerDialogProps {
-  mode: "reply";
+interface ComposerDialogCommonProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  thread: EmailThread;
-  detail: ThreadDetailData | undefined;
   session: SessionData;
   invalidateInbox: () => Promise<void>;
   onNotice: (message: string) => void;
 }
 
+interface RecentContact {
+  email: string;
+  name: string | null;
+}
+
+type ComposerDialogProps =
+  | (ComposerDialogCommonProps & {
+      mode: "reply";
+      thread: EmailThread;
+      detail: ThreadDetailData | undefined;
+    })
+  | (ComposerDialogCommonProps & {
+      mode: "new";
+      recentContacts: RecentContact[];
+    });
+
 export function ComposerDialog(props: ComposerDialogProps) {
   const queryClient = useQueryClient();
-  const { thread, detail, session } = props;
+  const { session } = props;
+
+  const isReply = props.mode === "reply";
+  const thread = isReply ? props.thread : undefined;
+  const detail = isReply ? props.detail : undefined;
 
   const [replyBody, setReplyBody] = useState("");
   const [replyDraftId, setReplyDraftId] = useState<string | null>(null);
@@ -67,7 +85,22 @@ export function ComposerDialog(props: ComposerDialogProps) {
   const [meetingLocation, setMeetingLocation] = useState("");
   const [attendeeText, setAttendeeText] = useState("");
   const [addMeetLink, setAddMeetLink] = useState(false);
+  const [attachMeeting, setAttachMeeting] = useState(true);
   const [bookingConfirmationOpen, setBookingConfirmationOpen] = useState(false);
+
+  const [toEmail, setToEmail] = useState("");
+  const [subject, setSubject] = useState("");
+
+  const recipientEmail = isReply ? (thread!.fromEmail ?? "") : toEmail.trim();
+  const messageSubject = isReply ? (detail?.thread.subject || thread!.subject || "") : subject;
+  const dialogKey = isReply ? thread!.gmailThreadId : "new";
+  const toEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail.trim());
+  // Only ever read by mutations that are exclusively defined and invoked
+  // in reply mode (generateReplyMutation, saveDraftMutation,
+  // discardDraftMutation, sendReplyMutation, bookingMutation) — this
+  // typed alias avoids repeating a non-null assertion at every one of
+  // their `thread.xxx` references now that `thread` is optional.
+  const replyThread = thread as EmailThread;
 
   const attendeeEmails = useMemo(
     () =>
@@ -82,32 +115,41 @@ export function ComposerDialog(props: ComposerDialogProps) {
   // dialog opens — matches the previous behavior of openComposerForThread.
   useEffect(() => {
     if (!props.open) return;
-    setMeetingTitle(thread.subject ?? "Meeting");
-    setMeetingDescription(
-      `Scheduled from Gmail thread: ${thread.subject ?? "Untitled conversation"}\n\nEmail context: ${thread.snippet ?? ""}`,
-    );
+    if (isReply) {
+      setMeetingTitle(thread!.subject ?? "Meeting");
+      setMeetingDescription(
+        `Scheduled from Gmail thread: ${thread!.subject ?? "Untitled conversation"}\n\nEmail context: ${thread!.snippet ?? ""}`,
+      );
+      setAttendeeText(thread!.fromEmail ?? "");
+    } else {
+      setToEmail("");
+      setSubject("");
+      setMeetingTitle("");
+      setMeetingDescription("");
+      setAttendeeText("");
+    }
     setMeetingLocation("");
-    setAttendeeText(thread.fromEmail ?? "");
     setAddMeetLink(false);
+    setAttachMeeting(true);
     setParsedSchedule(null);
     setAvailability(null);
     setSuggestedSlots([]);
     setSelectedSlot(null);
     setAmbiguityConfirmed(false);
     setScheduleMessage(null);
-  }, [props.open, thread.id]);
+  }, [props.open, dialogKey]);
 
   useEffect(() => {
-    if (!detail || draftHydratedFor === thread.gmailThreadId) return;
+    if (!isReply || !detail || draftHydratedFor === thread!.gmailThreadId) return;
     const latestDraft = detail.replies.find((reply) => reply.status !== "sent");
     setReplyBody(latestDraft?.body ?? "");
     setReplyDraftId(latestDraft?.id ?? null);
-    setDraftHydratedFor(thread.gmailThreadId);
-  }, [detail, draftHydratedFor, thread.gmailThreadId]);
+    setDraftHydratedFor(thread!.gmailThreadId);
+  }, [detail, draftHydratedFor, isReply]);
 
   const generateReplyMutation = useMutation({
     mutationFn: (regenerate: boolean) =>
-      api.post<{ reply: SuggestedReply }>(`/api/gmail/${thread.gmailThreadId}/reply`, {
+      api.post<{ reply: SuggestedReply }>(`/api/gmail/${replyThread.gmailThreadId}/reply`, {
         regenerate,
         currentBody: replyBody,
         draftId: replyDraftId ?? undefined,
@@ -120,7 +162,7 @@ export function ComposerDialog(props: ComposerDialogProps) {
   });
   const saveDraftMutation = useMutation({
     mutationFn: () =>
-      api.post<{ reply: SuggestedReply }>(`/api/gmail/${thread.gmailThreadId}/draft`, {
+      api.post<{ reply: SuggestedReply }>(`/api/gmail/${replyThread.gmailThreadId}/draft`, {
         body: replyBody,
         draftId: replyDraftId ?? undefined,
       }),
@@ -128,7 +170,7 @@ export function ComposerDialog(props: ComposerDialogProps) {
       setReplyDraftId(data.reply.id);
       props.onNotice("Draft saved. Nothing has been sent.");
       await queryClient.invalidateQueries({
-        queryKey: ["crm", "thread", thread.gmailThreadId],
+        queryKey: ["crm", "thread", replyThread.gmailThreadId],
       });
     },
   });
@@ -136,7 +178,7 @@ export function ComposerDialog(props: ComposerDialogProps) {
     mutationFn: async () => {
       if (!replyDraftId) return { discarded: true };
       return api.delete<{ discarded: boolean }>(
-        `/api/gmail/${thread.gmailThreadId}/draft/${replyDraftId}`,
+        `/api/gmail/${replyThread.gmailThreadId}/draft/${replyDraftId}`,
       );
     },
     onSuccess: async () => {
@@ -145,15 +187,15 @@ export function ComposerDialog(props: ComposerDialogProps) {
       props.onOpenChange(false);
       props.onNotice("Draft discarded.");
       await queryClient.invalidateQueries({
-        queryKey: ["crm", "thread", thread.gmailThreadId],
+        queryKey: ["crm", "thread", replyThread.gmailThreadId],
       });
     },
   });
   const sendReplyMutation = useMutation({
     mutationFn: () =>
-      api.post(`/api/gmail/${thread.gmailThreadId}/reply/send`, {
+      api.post(`/api/gmail/${replyThread.gmailThreadId}/reply/send`, {
         body: replyBody,
-        to: thread.fromEmail ?? undefined,
+        to: replyThread.fromEmail ?? undefined,
         draftId: replyDraftId ?? undefined,
         confirmed: true,
       }),
@@ -167,20 +209,60 @@ export function ComposerDialog(props: ComposerDialogProps) {
     },
   });
 
+  const sendMessageMutation = useMutation({
+    mutationFn: () =>
+      api.post<SendMessageResult>("/api/gmail/send", {
+        to: toEmail.trim(),
+        subject: subject.trim(),
+        body: replyBody,
+        confirmed: true as const,
+        ...(attachMeeting && canReviewBooking && selectedSlot
+          ? {
+              meeting: {
+                title: meetingTitle.trim() || "Meeting",
+                start: selectedSlot.start,
+                end: selectedSlot.end,
+                attendees: attendeeEmails.map((email) => ({ email })),
+                description: meetingDescription.trim() || undefined,
+                location: meetingLocation.trim() || undefined,
+                addMeetLink,
+              },
+            }
+          : {}),
+      }),
+    onSuccess: async (data) => {
+      setSendConfirmationOpen(false);
+      props.onOpenChange(false);
+      setReplyBody("");
+      await props.invalidateInbox();
+      if (data.booking) {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.events.all });
+        props.onNotice(
+          data.bookingError
+            ? `Message sent, but the calendar event could not be created: ${data.bookingError}`
+            : "Message sent and added to Ember Calendar.",
+        );
+      } else {
+        props.onNotice("Message sent.");
+      }
+    },
+  });
+
   const schedulingContext = useMemo(() => {
+    if (!isReply) return replyBody.slice(0, 50_000);
     const messages =
       [...(detail?.thread.messages ?? [])]
         .reverse()
         .slice(0, 6)
         .map((message) => message.bodyText || message.snippet)
         .join("\n\n") ||
-      thread.snippet ||
+      thread!.snippet ||
       "";
     return `Draft reply:\n${replyBody}\n\nMost recent conversation first:\n${messages}`.slice(
       0,
       50_000,
     );
-  }, [detail, replyBody, thread.snippet]);
+  }, [detail, isReply, replyBody, thread]);
 
   const parseScheduleMutation = useMutation({
     mutationFn: async (input: { text: string; participantEmails: string[] }) => {
@@ -225,6 +307,10 @@ export function ComposerDialog(props: ComposerDialogProps) {
       );
       setSuggestedSlots(unique);
       setSelectedSlot(unique[0] ?? null);
+      if (!isReply) {
+        if (!meetingTitle.trim() && subject.trim()) setMeetingTitle(subject.trim());
+        if (!attendeeText.trim() && toEmail.trim()) setAttendeeText(toEmail.trim());
+      }
     },
   });
 
@@ -264,7 +350,7 @@ export function ComposerDialog(props: ComposerDialogProps) {
         location: meetingLocation.trim() || undefined,
         confirmed: true as const,
         addMeetLink,
-        sourceThreadId: thread.id,
+        sourceThreadId: thread!.id,
       });
     },
     onSuccess: async () => {
@@ -297,10 +383,12 @@ export function ComposerDialog(props: ComposerDialogProps) {
       <Dialog open={props.open} onOpenChange={props.onOpenChange}>
         <DialogContent className="bottom-0 left-0 top-auto flex h-[min(94dvh,920px)] w-full max-w-none translate-x-0 translate-y-0 flex-col overflow-hidden rounded-b-none rounded-t-2xl p-0 sm:bottom-auto sm:left-1/2 sm:top-1/2 sm:h-[min(90dvh,900px)] sm:max-w-4xl sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl">
           <DialogHeader className="shrink-0 border-b border-border px-4 py-4 pr-12 sm:px-6">
-            <DialogTitle>Create draft</DialogTitle>
-            <DialogDescription className="truncate">
-              To: {thread.fromEmail ?? "Thread participant"} · {detail?.thread.subject || thread.subject || "No subject"}
-            </DialogDescription>
+            <DialogTitle>{isReply ? "Create draft" : "Compose message"}</DialogTitle>
+            {isReply && (
+              <DialogDescription className="truncate">
+                To: {thread!.fromEmail ?? "Thread participant"} · {detail?.thread.subject || thread!.subject || "No subject"}
+              </DialogDescription>
+            )}
           </DialogHeader>
 
           <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6 sm:py-5">
@@ -318,16 +406,41 @@ export function ComposerDialog(props: ComposerDialogProps) {
                   <h3 className="text-sm font-semibold">Message</h3>
                   <p className="mt-0.5 text-xs text-muted-foreground">AI suggestions remain editable and are never sent automatically.</p>
                 </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => generateReplyMutation.mutate(Boolean(replyBody.trim()))}
-                  disabled={generateReplyMutation.isPending}
-                >
-                  {generateReplyMutation.isPending ? <Loader2 className="animate-spin" /> : <Sparkles />}
-                  Suggest Message Reply
-                </Button>
+                {isReply && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => generateReplyMutation.mutate(Boolean(replyBody.trim()))}
+                    disabled={generateReplyMutation.isPending}
+                  >
+                    {generateReplyMutation.isPending ? <Loader2 className="animate-spin" /> : <Sparkles />}
+                    Suggest Message Reply
+                  </Button>
+                )}
               </div>
+              {props.mode === "new" && (
+                <div className="grid gap-3 border-b border-border p-4 sm:grid-cols-2">
+                  <Field label="To">
+                    <Input
+                      type="email"
+                      list="composer-recent-contacts"
+                      value={toEmail}
+                      onChange={(event) => setToEmail(event.target.value)}
+                      placeholder="alex@example.com"
+                    />
+                    <datalist id="composer-recent-contacts">
+                      {props.recentContacts.map((contact) => (
+                        <option key={contact.email} value={contact.email}>
+                          {contact.name ?? contact.email}
+                        </option>
+                      ))}
+                    </datalist>
+                  </Field>
+                  <Field label="Subject">
+                    <Input value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="Project kickoff" />
+                  </Field>
+                </div>
+              )}
               <Textarea
                 value={replyBody}
                 onChange={(event) => setReplyBody(event.target.value)}
@@ -414,8 +527,23 @@ export function ComposerDialog(props: ComposerDialogProps) {
                     <label className="flex h-10 items-center gap-2 self-end rounded-md border border-border px-3 text-sm"><input type="checkbox" checked={addMeetLink} onChange={(event) => setAddMeetLink(event.target.checked)} /><Video className="h-4 w-4" /> Add Google Meet</label>
                     <div className="sm:col-span-2"><Field label="Calendar description and email context"><Textarea value={meetingDescription} onChange={(event) => setMeetingDescription(event.target.value)} className="min-h-24" /></Field></div>
                     <div className="flex flex-wrap items-center justify-between gap-2 sm:col-span-2">
-                      <p className="text-[11px] text-muted-foreground">A confirmation step appears before Calendar is changed.</p>
-                      <Button onClick={() => setBookingConfirmationOpen(true)} disabled={!canReviewBooking}><CalendarDays /> Create Calendar event</Button>
+                      {!isReply && (
+                        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <input
+                            type="checkbox"
+                            checked={attachMeeting}
+                            disabled={!canReviewBooking}
+                            onChange={(event) => setAttachMeeting(event.target.checked)}
+                          />
+                          Attach a calendar invite for this time
+                        </label>
+                      )}
+                      {isReply && (
+                        <p className="text-[11px] text-muted-foreground">A confirmation step appears before Calendar is changed.</p>
+                      )}
+                      {isReply && (
+                        <Button onClick={() => setBookingConfirmationOpen(true)} disabled={!canReviewBooking}><CalendarDays /> Create Calendar event</Button>
+                      )}
                     </div>
                   </div>
                 )}
@@ -424,11 +552,22 @@ export function ComposerDialog(props: ComposerDialogProps) {
           </div>
 
           <DialogFooter className="shrink-0 flex-wrap border-t border-border bg-background px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-3 sm:px-6 sm:pb-4">
-            <Button variant="ghost" onClick={() => discardDraftMutation.mutate()} disabled={discardDraftMutation.isPending} className="mr-auto text-muted-foreground"><Trash2 /> Discard</Button>
-            <Button variant="outline" onClick={() => saveDraftMutation.mutate()} disabled={!replyBody.trim() || saveDraftMutation.isPending}>
-              {saveDraftMutation.isPending ? <Loader2 className="animate-spin" /> : <Save />} Save draft
+            {isReply ? (
+              <>
+                <Button variant="ghost" onClick={() => discardDraftMutation.mutate()} disabled={discardDraftMutation.isPending} className="mr-auto text-muted-foreground"><Trash2 /> Discard</Button>
+                <Button variant="outline" onClick={() => saveDraftMutation.mutate()} disabled={!replyBody.trim() || saveDraftMutation.isPending}>
+                  {saveDraftMutation.isPending ? <Loader2 className="animate-spin" /> : <Save />} Save draft
+                </Button>
+              </>
+            ) : (
+              <Button variant="ghost" onClick={() => props.onOpenChange(false)} className="mr-auto text-muted-foreground"><Trash2 /> Discard</Button>
+            )}
+            <Button
+              onClick={() => setSendConfirmationOpen(true)}
+              disabled={isReply ? !replyBody.trim() : !(toEmailValid && subject.trim() && replyBody.trim())}
+            >
+              <Send /> Review and send
             </Button>
-            <Button onClick={() => setSendConfirmationOpen(true)} disabled={!replyBody.trim()}><Send /> Review and send</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -436,50 +575,72 @@ export function ComposerDialog(props: ComposerDialogProps) {
       <Dialog open={sendConfirmationOpen} onOpenChange={setSendConfirmationOpen}>
         <DialogContent className="max-w-xl p-6">
           <DialogHeader>
-            <DialogTitle>Send this reply?</DialogTitle>
+            <DialogTitle>{isReply ? "Send this reply?" : "Send this message?"}</DialogTitle>
             <DialogDescription>Review the final recipient and message. This is the only step that sends email.</DialogDescription>
           </DialogHeader>
-          <div className="my-5 rounded-lg border border-border bg-muted/40 p-4 text-sm">
-            <p className="font-medium">To: {thread.fromEmail ?? "Thread participant"}</p>
-            <p className="mt-3 max-h-60 whitespace-pre-wrap overflow-auto text-muted-foreground">{replyBody}</p>
+          <div className="my-5 space-y-3 rounded-lg border border-border bg-muted/40 p-4 text-sm">
+            <div>
+              <p className="font-medium">To: {isReply ? (thread!.fromEmail ?? "Thread participant") : recipientEmail}</p>
+              {!isReply && <p className="font-medium">Subject: {messageSubject}</p>}
+              <p className="mt-3 max-h-60 whitespace-pre-wrap overflow-auto text-muted-foreground">{replyBody}</p>
+            </div>
+            {!isReply && attachMeeting && canReviewBooking && selectedSlot && (
+              <div className="border-t border-border pt-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Also creates a calendar event</p>
+                <p className="mt-1 font-semibold">{meetingTitle || "Meeting"}</p>
+                <p>{formatDateRange(selectedSlot.start, selectedSlot.end, session.user.timezone)}</p>
+                {attendeeEmails.length > 0 && <p className="text-muted-foreground">Guests: {attendeeEmails.join(", ")}</p>}
+                {addMeetLink && <p className="text-muted-foreground">Google Meet link requested</p>}
+              </div>
+            )}
           </div>
-          {sendReplyMutation.error && (
-            <p className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="alert">{errorMessage(sendReplyMutation.error)}</p>
+          {(isReply ? sendReplyMutation.error : sendMessageMutation.error) && (
+            <p className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="alert">
+              {errorMessage(isReply ? sendReplyMutation.error : sendMessageMutation.error)}
+            </p>
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setSendConfirmationOpen(false)}>Keep editing</Button>
-            <Button onClick={() => sendReplyMutation.mutate()} disabled={!replyBody.trim() || sendReplyMutation.isPending}>
-              {sendReplyMutation.isPending ? <Loader2 className="animate-spin" /> : <Send />} Confirm and send
+            <Button
+              onClick={() => (isReply ? sendReplyMutation.mutate() : sendMessageMutation.mutate())}
+              disabled={
+                (isReply ? !replyBody.trim() : !(toEmailValid && subject.trim() && replyBody.trim())) ||
+                (isReply ? sendReplyMutation.isPending : sendMessageMutation.isPending)
+              }
+            >
+              {(isReply ? sendReplyMutation.isPending : sendMessageMutation.isPending) ? <Loader2 className="animate-spin" /> : <Send />} Confirm and send
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={bookingConfirmationOpen} onOpenChange={setBookingConfirmationOpen}>
-        <DialogContent className="max-w-lg p-6">
-          <DialogHeader>
-            <DialogTitle>Create this calendar event?</DialogTitle>
-            <DialogDescription>No Calendar change occurs until you confirm below.</DialogDescription>
-          </DialogHeader>
-          {selectedSlot && (
-            <div className="my-5 space-y-2 rounded-lg border border-border bg-muted/40 p-4 text-sm">
-              <p className="font-semibold">{meetingTitle || "Meeting"}</p>
-              <p>{formatDateRange(selectedSlot.start, selectedSlot.end, session.user.timezone)}</p>
-              {attendeeEmails.length > 0 && <p className="text-muted-foreground">Guests: {attendeeEmails.join(", ")}</p>}
-              {addMeetLink && <p className="text-muted-foreground">Google Meet link requested</p>}
-            </div>
-          )}
-          {bookingMutation.error && (
-            <p className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="alert">{errorMessage(bookingMutation.error)}</p>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setBookingConfirmationOpen(false)}>Go back</Button>
-            <Button onClick={() => bookingMutation.mutate()} disabled={bookingMutation.isPending}>
-              {bookingMutation.isPending ? <Loader2 className="animate-spin" /> : <CalendarDays />} Confirm booking
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {isReply && (
+        <Dialog open={bookingConfirmationOpen} onOpenChange={setBookingConfirmationOpen}>
+          <DialogContent className="max-w-lg p-6">
+            <DialogHeader>
+              <DialogTitle>Create this calendar event?</DialogTitle>
+              <DialogDescription>No Calendar change occurs until you confirm below.</DialogDescription>
+            </DialogHeader>
+            {selectedSlot && (
+              <div className="my-5 space-y-2 rounded-lg border border-border bg-muted/40 p-4 text-sm">
+                <p className="font-semibold">{meetingTitle || "Meeting"}</p>
+                <p>{formatDateRange(selectedSlot.start, selectedSlot.end, session.user.timezone)}</p>
+                {attendeeEmails.length > 0 && <p className="text-muted-foreground">Guests: {attendeeEmails.join(", ")}</p>}
+                {addMeetLink && <p className="text-muted-foreground">Google Meet link requested</p>}
+              </div>
+            )}
+            {bookingMutation.error && (
+              <p className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="alert">{errorMessage(bookingMutation.error)}</p>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setBookingConfirmationOpen(false)}>Go back</Button>
+              <Button onClick={() => bookingMutation.mutate()} disabled={bookingMutation.isPending}>
+                {bookingMutation.isPending ? <Loader2 className="animate-spin" /> : <CalendarDays />} Confirm booking
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </>
   );
 }

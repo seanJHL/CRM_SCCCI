@@ -1,6 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Archive,
@@ -16,6 +16,7 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  SquarePen,
   Trash2,
   Unplug,
 } from "lucide-react";
@@ -100,6 +101,7 @@ export function CrmDashboard({ initialSession }: { initialSession: SessionData }
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(new Set());
   const [composerOpen, setComposerOpen] = useState(false);
+  const [composeMode, setComposeMode] = useState<"reply" | "new">("reply");
   const [notice, setNotice] = useState<string | null>(null);
 
   const sessionQuery = useQuery({
@@ -217,8 +219,23 @@ export function CrmDashboard({ initialSession }: { initialSession: SessionData }
 
   const openComposerForThread = (thread: EmailThread) => {
     setSelectedThreadId(thread.gmailThreadId);
+    setComposeMode("reply");
     setComposerOpen(true);
   };
+  const openComposerNew = () => {
+    setComposeMode("new");
+    setComposerOpen(true);
+  };
+
+  const recentContacts = useMemo(() => {
+    const seen = new Map<string, string | null>();
+    for (const thread of threads) {
+      if (thread.fromEmail && !seen.has(thread.fromEmail)) {
+        seen.set(thread.fromEmail, thread.fromName);
+      }
+    }
+    return [...seen.entries()].map(([email, name]) => ({ email, name }));
+  }, [threads]);
 
   const [accountAction, setAccountAction] = useState<AccountAction>(null);
   const accountMutation = useMutation({
@@ -340,6 +357,7 @@ export function CrmDashboard({ initialSession }: { initialSession: SessionData }
               selectedThread={selectedThread}
               onUpdate={(updates) => selectedThreadId && updateThreadMutation.mutate({ threadId: selectedThreadId, updates })}
               onCreateDraft={() => selectedThread && openComposerForThread(selectedThread)}
+              onCompose={openComposerNew}
             />
           )}
 
@@ -353,7 +371,7 @@ export function CrmDashboard({ initialSession }: { initialSession: SessionData }
           )}
       </main>
 
-      {selectedThread && (
+      {composerOpen && composeMode === "reply" && selectedThread && (
         <ComposerDialog
           mode="reply"
           open={composerOpen}
@@ -361,6 +379,17 @@ export function CrmDashboard({ initialSession }: { initialSession: SessionData }
           thread={selectedThread}
           detail={threadDetailQuery.data}
           session={session}
+          invalidateInbox={invalidateInbox}
+          onNotice={setNotice}
+        />
+      )}
+      {composerOpen && composeMode === "new" && (
+        <ComposerDialog
+          mode="new"
+          open={composerOpen}
+          onOpenChange={setComposerOpen}
+          session={session}
+          recentContacts={recentContacts}
           invalidateInbox={invalidateInbox}
           onNotice={setNotice}
         />
@@ -408,6 +437,7 @@ function InboxView(props: {
   selectedThread?: EmailThread;
   onUpdate: (updates: Partial<Pick<EmailThread, "category" | "priority" | "status">>) => void;
   onCreateDraft: () => void;
+  onCompose: () => void;
 }) {
   return (
     <section className="min-h-0">
@@ -419,6 +449,9 @@ function InboxView(props: {
           <span><strong className="font-semibold text-foreground">{props.stats?.requiresResponse ?? "—"}</strong> need a reply</span>
           <div className="ml-auto flex items-center gap-2">
             <span className="hidden items-center gap-1.5 sm:flex"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Auto-sync on</span>
+            <Button size="sm" variant="outline" onClick={props.onCompose}>
+              <SquarePen /> Compose
+            </Button>
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={props.onSync} disabled={props.syncing} aria-label="Refresh Gmail now" title="Refresh Gmail now">
               {props.syncing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
             </Button>

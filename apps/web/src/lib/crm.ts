@@ -168,6 +168,14 @@ export interface AvailabilityResult {
   }>;
 }
 
+export interface SendMessageResult {
+  sent: boolean;
+  messageId: string;
+  threadId: string;
+  booking: CalendarBooking | null;
+  bookingError?: string;
+}
+
 export interface SuggestedSlot {
   start: string;
   end: string;
