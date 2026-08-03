@@ -13,7 +13,7 @@ import {
   hashToken,
   secureEqual,
 } from "../src/lib/crypto";
-import { gmailGetThread } from "../src/lib/google-api";
+import { gmailGetThread, gmailSendReply } from "../src/lib/google-api";
 import { generateOpenRouterReply, OPENROUTER_REPLY_MODEL } from "../src/lib/openrouter";
 import type { GmailMessage } from "../src/lib/google-api";
 
@@ -224,5 +224,35 @@ describe("privacy and token protection", () => {
     );
     expect(await secureEqual("same", "same")).toBe(true);
     expect(await secureEqual("same", "different")).toBe(false);
+  });
+});
+
+describe("gmail send", () => {
+  it("sends a brand-new message without threading headers and returns the created thread id", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const payload = JSON.parse(String(init?.body)) as { raw: string; threadId?: string };
+      expect(payload.threadId).toBeUndefined();
+      const decoded = Buffer.from(
+        payload.raw.replace(/-/g, "+").replace(/_/g, "/"),
+        "base64",
+      ).toString("utf-8");
+      expect(decoded).not.toContain("In-Reply-To:");
+      expect(decoded).not.toContain("References:");
+      expect(decoded).toContain("To: alex@example.com");
+      expect(decoded).toContain("Subject: Project kickoff");
+      return Response.json({ id: "message-new-1", threadId: "thread-new-1", labelIds: ["SENT"] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await gmailSendReply("access-token", {
+      to: "alex@example.com",
+      subject: "Project kickoff",
+      body: "Let's have a call this Tuesday at 12:00 PM.",
+    });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(result).toEqual(
+      expect.objectContaining({ id: "message-new-1", threadId: "thread-new-1" }),
+    );
   });
 });

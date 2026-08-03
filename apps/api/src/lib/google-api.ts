@@ -209,6 +209,11 @@ export async function gmailGetThread(
   };
 }
 
+export interface GmailSendResult {
+  id: string;
+  threadId: string;
+}
+
 /**
  * Send a reply email via Gmail.
  * Builds an RFC 2822 message with threading headers.
@@ -223,7 +228,7 @@ export async function gmailSendReply(
     inReplyTo?: string | null;
     references?: string | null;
   },
-): Promise<{ id: string }> {
+): Promise<GmailSendResult> {
   const { to, subject, body, threadId, inReplyTo, references } = params;
   const safeTo = sanitiseMailHeader(to);
   const safeSubject = sanitiseMailHeader(subject);
