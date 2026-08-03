@@ -191,24 +191,52 @@ gmailRoute.post("/send", async (c) => {
     GOOGLE_SCOPE.GMAIL_SEND,
   ]);
 
+  // The send itself is irreversible and has no idempotency protection for
+  // brand-new messages, so once it succeeds nothing after it may turn into
+  // an error response — a user who sees "failed" here and retries could
+  // send a genuine duplicate email.
   const sendResult = await gmailSendReply(accessToken, { to, subject, body });
-  const detail = await gmailGetThread(accessToken, sendResult.threadId);
-  const cachedThread = await cacheAndClassifyThread(
-    db,
-    userId,
-    user.timezone,
-    detail,
-  );
 
-  await logAction(db, userId, AuditAction.EMAIL_SEND, "email_thread", cachedThread.id, {
-    threadId: sendResult.threadId,
-    to,
-    messageId: sendResult.id,
-  });
+  let cachedThread: EmailThread | null = null;
+  try {
+    const detail = await gmailGetThread(accessToken, sendResult.threadId);
+    cachedThread = await cacheAndClassifyThread(
+      db,
+      userId,
+      user.timezone,
+      detail,
+    );
+
+    await logAction(db, userId, AuditAction.EMAIL_SEND, "email_thread", cachedThread.id, {
+      threadId: sendResult.threadId,
+      to,
+      messageId: sendResult.id,
+    });
+  } catch (error) {
+    // Best-effort: the email already sent successfully, so a failure here
+    // (a second Gmail read, a DB write, or the audit log) must not fail the
+    // request. Log server-side since this is otherwise invisible — it never
+    // reaches the global error handler.
+    console.error(
+      JSON.stringify({
+        level: "error",
+        type: "gmail_send_post_process_failed",
+        userId,
+        threadId: sendResult.threadId,
+        code: error instanceof ApiError ? error.code : "UNKNOWN",
+      }),
+    );
+  }
 
   let booking: Awaited<ReturnType<typeof createCalendarBooking>>["booking"] | null = null;
   let bookingError: string | undefined;
-  if (meeting) {
+  if (meeting && !cachedThread) {
+    // createCalendarBooking needs sourceThreadId to be a cached
+    // emailThreads.id, which doesn't exist because caching above failed.
+    // The email still sent successfully; only the booking is deferred.
+    bookingError =
+      "The message was sent, but the conversation could not be synced yet, so no calendar event was created. It will appear after the next Gmail sync — try booking from there.";
+  } else if (meeting && cachedThread) {
     try {
       const created = await createCalendarBooking(db, env, userId, user, {
         ...meeting,
@@ -218,7 +246,18 @@ gmailRoute.post("/send", async (c) => {
     } catch (error) {
       // The email is not reversible — a booking failure (e.g. a conflict
       // that appeared between slot suggestion and confirmation) must not
-      // be reported as if the whole action failed.
+      // be reported as if the whole action failed. Log server-side since
+      // this is otherwise invisible — it never reaches the global error
+      // handler.
+      console.error(
+        JSON.stringify({
+          level: "error",
+          type: "booking_after_send_failed",
+          userId,
+          threadId: cachedThread.id,
+          code: error instanceof ApiError ? error.code : "UNKNOWN",
+        }),
+      );
       bookingError =
         error instanceof ApiError
           ? error.message
@@ -230,7 +269,7 @@ gmailRoute.post("/send", async (c) => {
     ok({
       sent: true,
       messageId: sendResult.id,
-      threadId: cachedThread.gmailThreadId,
+      threadId: cachedThread ? cachedThread.gmailThreadId : sendResult.threadId,
       booking,
       bookingError,
     }),
