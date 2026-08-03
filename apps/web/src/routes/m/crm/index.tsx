@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Filter, Mail, RefreshCw, Settings, SquarePen } from "lucide-react";
 import { api, ApiClientError } from "@/lib/api";
-import { type EmailThread, type GmailStats } from "@/lib/crm";
+import { type EmailThread, type GmailStats, googleSignInUrl } from "@/lib/crm";
 import { MobileErrorState } from "@/components/mobile/error-state";
 import { MobileCrmHeader } from "@/components/crm/mobile/mobile-crm-header";
 import { ComposerDialog } from "@/components/crm/composer-dialog";
@@ -84,6 +84,7 @@ function MobileCrmInbox() {
       notify({ title: "Threads reclassified" });
       await invalidateInbox();
     },
+    onError: () => notify({ title: "Couldn't reclassify threads", body: "Try again in a moment." }),
   });
   const bulkUpdateMutation = useMutation({
     mutationFn: (updates: { status: "archived" }) =>
@@ -94,6 +95,7 @@ function MobileCrmInbox() {
       notify({ title: "Threads archived" });
       await invalidateInbox();
     },
+    onError: () => notify({ title: "Couldn't archive threads", body: "Try again in a moment." }),
   });
   const bulkDraftMutation = useMutation({
     mutationFn: () => api.post<{ generated: number }>("/api/gmail/bulk/replies", { threadIds: [...selectedIds] }),
@@ -103,6 +105,11 @@ function MobileCrmInbox() {
       notify({ title: `${data.generated} drafts generated`, body: "No emails were sent." });
       await invalidateInbox();
     },
+    onError: () =>
+      notify({
+        title: "Couldn't generate drafts",
+        body: "Try again in a moment. Note: drafts can only be generated for 20 threads at a time.",
+      }),
   });
   const bulkPending = bulkClassifyMutation.isPending || bulkUpdateMutation.isPending || bulkDraftMutation.isPending;
 
@@ -121,7 +128,7 @@ function MobileCrmInbox() {
     return [...seen.entries()].map(([email, name]) => ({ email, name }));
   }, [threads]);
 
-  const topError = threadsQuery.error ?? statsQuery.error;
+  const topError = threadsQuery.error ?? statsQuery.error ?? gmailSyncQuery.error;
 
   return (
     <div className="m-controller-page flex flex-col gap-4">
@@ -210,9 +217,17 @@ function MobileCrmInbox() {
 
       {topError && (
         <MobileErrorState
-          title="Couldn't load your inbox"
-          message="Check your connection and try again."
+          title={isActionRequired(topError) ? "Reconnect Google" : "Couldn't load your inbox"}
+          message={
+            isActionRequired(topError)
+              ? "Your Google connection needs to be refreshed to continue."
+              : "Check your connection and try again."
+          }
           onRetry={() => {
+            if (isActionRequired(topError)) {
+              window.location.assign(googleSignInUrl());
+              return;
+            }
             void threadsQuery.refetch();
             void statsQuery.refetch();
           }}
@@ -385,7 +400,11 @@ function MobileThreadRow({
           />
         </label>
       )}
-      <button type="button" onClick={selectMode ? onToggleCheck : onOpen} className="m-press flex min-h-[76px] flex-1 flex-col items-start gap-1 py-3 pr-3.5 text-left">
+      <button
+        type="button"
+        onClick={selectMode ? onToggleCheck : onOpen}
+        className={`m-press flex min-h-[76px] flex-1 flex-col items-start gap-1 py-3 pr-3.5 text-left ${selectMode ? "" : "pl-3.5"}`}
+      >
         <div className="flex w-full min-w-0 items-center gap-2">
           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${thread.hasUnread ? "bg-[var(--m-primary)]" : "bg-transparent"}`} aria-hidden="true" />
           <span className={`truncate text-[13px] ${thread.hasUnread ? "font-semibold text-[var(--m-text)]" : "font-medium text-[var(--m-text-2)]"}`}>

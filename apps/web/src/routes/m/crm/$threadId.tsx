@@ -133,12 +133,14 @@ function MobileCrmThreadDetail() {
               value={classification.category}
               values={CATEGORIES}
               onChange={(value) => updateMutation.mutate({ category: value as EmailCategory })}
+              hideAllOption
             />
             <MobileFilterSelect
               label="Priority"
               value={classification.priority}
               values={PRIORITIES}
               onChange={(value) => updateMutation.mutate({ priority: value as EmailPriority })}
+              hideAllOption
             />
           </div>
           <div>
@@ -187,6 +189,7 @@ function MobileCrmThreadDetail() {
           value={classification?.status ?? ""}
           values={STATUSES}
           onChange={(value) => updateMutation.mutate({ status: value as EmailStatus })}
+          hideAllOption
         />
       </div>
 

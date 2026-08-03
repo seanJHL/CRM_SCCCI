@@ -7,11 +7,13 @@ export function MobileFilterSelect({
   value,
   values,
   onChange,
+  hideAllOption,
 }: {
   label: string;
   value: string;
   values: readonly string[];
   onChange: (value: string) => void;
+  hideAllOption?: boolean;
 }) {
   return (
     <label className="block">
@@ -22,7 +24,7 @@ export function MobileFilterSelect({
           onChange={(event) => onChange(event.target.value)}
           className="m-field w-full appearance-none pr-9 capitalize"
         >
-          <option value="">All {label.toLowerCase()}s</option>
+          {!hideAllOption && <option value="">All {label.toLowerCase()}s</option>}
           {values.map((item) => (
             <option key={item} value={item}>
               {item}

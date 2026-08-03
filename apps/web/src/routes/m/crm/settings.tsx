@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { type AuditLog, type PrivacySummary } from "@/lib/crm";
 import { notify } from "@/components/mobile/notification-banner";
 import { MobileCrmHeader } from "@/components/crm/mobile/mobile-crm-header";
+import { MobileErrorState } from "@/components/mobile/error-state";
 
 export const Route = createFileRoute("/m/crm/settings")({
   component: MobileCrmSettings,
@@ -91,24 +92,38 @@ function MobileCrmSettings() {
         <h2 className="flex items-center gap-2 text-[13px] font-semibold text-[var(--m-text)]">
           <Database width={15} height={15} /> Stored data
         </h2>
-        {privacyQuery.data && (
-          <>
-            <div className="grid grid-cols-2 gap-2">
-              {Object.entries(privacyQuery.data.summary).map(([label, value]) => (
-                <div key={label} className="m-inset p-2.5">
-                  <p className="text-[16px] font-semibold text-[var(--m-text)]">{value}</p>
-                  <p className="mt-0.5 text-[9px] text-[var(--m-text-3)]">{label}</p>
-                </div>
-              ))}
-            </div>
-            <p className="text-[11px] leading-5 text-[var(--m-text-2)]">{privacyQuery.data.description}</p>
-          </>
+        {privacyQuery.isError ? (
+          <MobileErrorState
+            title="Couldn't load stored data"
+            message="Try again in a moment."
+            onRetry={() => void privacyQuery.refetch()}
+          />
+        ) : (
+          privacyQuery.data && (
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                {Object.entries(privacyQuery.data.summary).map(([label, value]) => (
+                  <div key={label} className="m-inset p-2.5">
+                    <p className="text-[16px] font-semibold text-[var(--m-text)]">{value}</p>
+                    <p className="mt-0.5 text-[9px] text-[var(--m-text-3)]">{label}</p>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] leading-5 text-[var(--m-text-2)]">{privacyQuery.data.description}</p>
+            </>
+          )
         )}
       </section>
 
       <section className="m-card space-y-2.5 p-4">
         <h2 className="text-[13px] font-semibold text-[var(--m-text)]">Recent audit activity</h2>
-        {auditQuery.data?.logs.length ? (
+        {auditQuery.isError ? (
+          <MobileErrorState
+            title="Couldn't load audit activity"
+            message="Try again in a moment."
+            onRetry={() => void auditQuery.refetch()}
+          />
+        ) : auditQuery.data?.logs.length ? (
           <div className="space-y-1.5">
             {auditQuery.data.logs.map((log) => (
               <div key={log.id} className="m-inset flex items-center justify-between gap-2 px-2.5 py-2 text-[11px]">
