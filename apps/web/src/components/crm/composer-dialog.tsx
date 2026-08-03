@@ -95,11 +95,13 @@ export function ComposerDialog(props: ComposerDialogProps) {
   const messageSubject = isReply ? (detail?.thread.subject || thread!.subject || "") : subject;
   const dialogKey = isReply ? thread!.gmailThreadId : "new";
   const toEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail.trim());
-  // Only ever read by mutations that are exclusively defined and invoked
-  // in reply mode (generateReplyMutation, saveDraftMutation,
-  // discardDraftMutation, sendReplyMutation, bookingMutation) — this
-  // typed alias avoids repeating a non-null assertion at every one of
-  // their `thread.xxx` references now that `thread` is optional.
+  // Read by mutations that are exclusively defined and invoked in reply
+  // mode. generateReplyMutation, saveDraftMutation, discardDraftMutation,
+  // and sendReplyMutation use this typed alias for their `thread.xxx`
+  // references now that `thread` is optional; bookingMutation instead uses
+  // `thread!` directly. Each of these mutations guards against a missing
+  // `thread` at the top of its `mutationFn` (see below), since JSX gating
+  // alone isn't an invariant the type system can enforce.
   const replyThread = thread as EmailThread;
 
   const attendeeEmails = useMemo(
@@ -148,12 +150,14 @@ export function ComposerDialog(props: ComposerDialogProps) {
   }, [detail, draftHydratedFor, isReply]);
 
   const generateReplyMutation = useMutation({
-    mutationFn: (regenerate: boolean) =>
-      api.post<{ reply: SuggestedReply }>(`/api/gmail/${replyThread.gmailThreadId}/reply`, {
+    mutationFn: (regenerate: boolean) => {
+      if (!thread) throw new Error("generateReplyMutation is reply-only and was invoked without a thread");
+      return api.post<{ reply: SuggestedReply }>(`/api/gmail/${replyThread.gmailThreadId}/reply`, {
         regenerate,
         currentBody: replyBody,
         draftId: replyDraftId ?? undefined,
-      }),
+      });
+    },
     onSuccess: (data) => {
       setReplyBody(data.reply.body);
       setReplyDraftId(data.reply.id);
@@ -161,11 +165,13 @@ export function ComposerDialog(props: ComposerDialogProps) {
     },
   });
   const saveDraftMutation = useMutation({
-    mutationFn: () =>
-      api.post<{ reply: SuggestedReply }>(`/api/gmail/${replyThread.gmailThreadId}/draft`, {
+    mutationFn: () => {
+      if (!thread) throw new Error("saveDraftMutation is reply-only and was invoked without a thread");
+      return api.post<{ reply: SuggestedReply }>(`/api/gmail/${replyThread.gmailThreadId}/draft`, {
         body: replyBody,
         draftId: replyDraftId ?? undefined,
-      }),
+      });
+    },
     onSuccess: async (data) => {
       setReplyDraftId(data.reply.id);
       props.onNotice("Draft saved. Nothing has been sent.");
@@ -176,6 +182,7 @@ export function ComposerDialog(props: ComposerDialogProps) {
   });
   const discardDraftMutation = useMutation({
     mutationFn: async () => {
+      if (!thread) throw new Error("discardDraftMutation is reply-only and was invoked without a thread");
       if (!replyDraftId) return { discarded: true };
       return api.delete<{ discarded: boolean }>(
         `/api/gmail/${replyThread.gmailThreadId}/draft/${replyDraftId}`,
@@ -192,13 +199,15 @@ export function ComposerDialog(props: ComposerDialogProps) {
     },
   });
   const sendReplyMutation = useMutation({
-    mutationFn: () =>
-      api.post(`/api/gmail/${replyThread.gmailThreadId}/reply/send`, {
+    mutationFn: () => {
+      if (!thread) throw new Error("sendReplyMutation is reply-only and was invoked without a thread");
+      return api.post(`/api/gmail/${replyThread.gmailThreadId}/reply/send`, {
         body: replyBody,
         to: replyThread.fromEmail ?? undefined,
         draftId: replyDraftId ?? undefined,
         confirmed: true,
-      }),
+      });
+    },
     onSuccess: async () => {
       setSendConfirmationOpen(false);
       props.onOpenChange(false);
@@ -235,13 +244,14 @@ export function ComposerDialog(props: ComposerDialogProps) {
       props.onOpenChange(false);
       setReplyBody("");
       await props.invalidateInbox();
-      if (data.booking) {
+      if (data.bookingError) {
+        // The backend only ever sets one of `booking`/`bookingError`, never
+        // both — check bookingError first, independent of `booking`, so a
+        // real booking failure is never masked as a bare "Message sent."
+        props.onNotice(`Message sent, but the calendar event could not be created: ${data.bookingError}`);
+      } else if (data.booking) {
         await queryClient.invalidateQueries({ queryKey: queryKeys.events.all });
-        props.onNotice(
-          data.bookingError
-            ? `Message sent, but the calendar event could not be created: ${data.bookingError}`
-            : "Message sent and added to Ember Calendar.",
-        );
+        props.onNotice("Message sent and added to Ember Calendar.");
       } else {
         props.onNotice("Message sent.");
       }
@@ -340,6 +350,7 @@ export function ComposerDialog(props: ComposerDialogProps) {
 
   const bookingMutation = useMutation({
     mutationFn: async () => {
+      if (!thread) throw new Error("bookingMutation is reply-only and was invoked without a thread");
       if (!selectedSlot) throw new Error("Select a time slot first");
       return api.post("/api/calendar-crm/events", {
         title: meetingTitle.trim() || "Meeting",
@@ -381,7 +392,19 @@ export function ComposerDialog(props: ComposerDialogProps) {
   return (
     <>
       <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-        <DialogContent className="bottom-0 left-0 top-auto flex h-[min(94dvh,920px)] w-full max-w-none translate-x-0 translate-y-0 flex-col overflow-hidden rounded-b-none rounded-t-2xl p-0 sm:bottom-auto sm:left-1/2 sm:top-1/2 sm:h-[min(90dvh,900px)] sm:max-w-4xl sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl">
+        <DialogContent
+          onEscapeKeyDown={(event) => {
+            // New-compose mode has no persisted draft, so an accidental
+            // Escape/outside-click must not silently discard a non-empty
+            // draft. An empty new-mode composer, or reply mode (which
+            // hydrates from a persisted draft), dismisses normally.
+            if (!isReply && (toEmail.trim() || subject.trim() || replyBody.trim())) event.preventDefault();
+          }}
+          onPointerDownOutside={(event) => {
+            if (!isReply && (toEmail.trim() || subject.trim() || replyBody.trim())) event.preventDefault();
+          }}
+          className="bottom-0 left-0 top-auto flex h-[min(94dvh,920px)] w-full max-w-none translate-x-0 translate-y-0 flex-col overflow-hidden rounded-b-none rounded-t-2xl p-0 sm:bottom-auto sm:left-1/2 sm:top-1/2 sm:h-[min(90dvh,900px)] sm:max-w-4xl sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl"
+        >
           <DialogHeader className="shrink-0 border-b border-border px-4 py-4 pr-12 sm:px-6">
             <DialogTitle>{isReply ? "Create draft" : "Compose message"}</DialogTitle>
             {isReply && (

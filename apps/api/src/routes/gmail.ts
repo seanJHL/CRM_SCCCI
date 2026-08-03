@@ -197,6 +197,31 @@ gmailRoute.post("/send", async (c) => {
   // send a genuine duplicate email.
   const sendResult = await gmailSendReply(accessToken, { to, subject, body });
 
+  // Log the send immediately, independent of whether the caching below
+  // succeeds — resourceId is null because the emailThreads row it would
+  // otherwise reference may not exist yet; the Gmail thread id goes in
+  // details instead (already PII-masked by logAction). This keeps the
+  // audit trail for a real send from being erased by a later caching
+  // hiccup. Best-effort: the email already sent successfully, so a
+  // failure here must not turn a successful send into an error response.
+  try {
+    await logAction(db, userId, AuditAction.EMAIL_SEND, "email_thread", null, {
+      threadId: sendResult.threadId,
+      to,
+      messageId: sendResult.id,
+    });
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        level: "error",
+        type: "gmail_send_audit_log_failed",
+        userId,
+        threadId: sendResult.threadId,
+        code: error instanceof ApiError ? error.code : "UNKNOWN",
+      }),
+    );
+  }
+
   let cachedThread: EmailThread | null = null;
   try {
     const detail = await gmailGetThread(accessToken, sendResult.threadId);
@@ -206,17 +231,11 @@ gmailRoute.post("/send", async (c) => {
       user.timezone,
       detail,
     );
-
-    await logAction(db, userId, AuditAction.EMAIL_SEND, "email_thread", cachedThread.id, {
-      threadId: sendResult.threadId,
-      to,
-      messageId: sendResult.id,
-    });
   } catch (error) {
     // Best-effort: the email already sent successfully, so a failure here
-    // (a second Gmail read, a DB write, or the audit log) must not fail the
-    // request. Log server-side since this is otherwise invisible — it never
-    // reaches the global error handler.
+    // (a second Gmail read or a DB write) must not fail the request. Log
+    // server-side since this is otherwise invisible — it never reaches the
+    // global error handler.
     console.error(
       JSON.stringify({
         level: "error",
