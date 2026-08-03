@@ -26,7 +26,11 @@ import {
   type GmailMessage,
 } from "@/lib/google-api";
 import { classifyEmail } from "@/lib/email-classifier";
-import { generateReply, regenerateReply } from "@/lib/reply-generator";
+import { generateReply } from "@/lib/reply-generator";
+import {
+  generateOpenRouterReply,
+  OPENROUTER_REPLY_MODEL,
+} from "@/lib/openrouter";
 import { logAction, AuditAction } from "@/lib/audit";
 
 const gmailRoute = new Hono<AppBindings>();
@@ -44,6 +48,7 @@ const threadUpdateSchema = z.object({
 const replyGenerateSchema = z.object({
   regenerate: z.boolean().optional(),
   currentBody: z.string().max(100_000).optional(),
+  draftId: z.string().uuid().optional(),
 });
 
 const replySendSchema = z.object({
@@ -51,6 +56,11 @@ const replySendSchema = z.object({
   to: z.string().email().optional(),
   draftId: z.string().uuid().optional(),
   confirmed: z.literal(true),
+});
+
+const replySaveSchema = z.object({
+  body: z.string().trim().min(1, "Draft body is required").max(100_000),
+  draftId: z.string().uuid().optional(),
 });
 
 const bulkUpdateSchema = z.object({
@@ -255,11 +265,29 @@ gmailRoute.get("/:threadId", async (c) => {
       ),
     );
 
-  // Fetch full thread from Gmail
-  const accessToken = await getValidAccessToken(db, env, userId, [
-    GOOGLE_SCOPE.GMAIL_READ,
-  ]);
-  const detail = await gmailGetThread(accessToken, threadId);
+  // Fetch full thread from Gmail. Idempotent reads are retried by the Google
+  // client; if Gmail still has a transient problem, keep the cached metadata
+  // usable instead of forcing the user to manually resynchronise.
+  let detail;
+  let stale = false;
+  try {
+    const accessToken = await getValidAccessToken(db, env, userId, [
+      GOOGLE_SCOPE.GMAIL_READ,
+    ]);
+    detail = await gmailGetThread(accessToken, threadId);
+  } catch (error) {
+    if (!cached || isGoogleActionRequired(error)) throw error;
+    detail = cachedThreadDetail(cached);
+    stale = true;
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        type: "gmail_thread_cache_fallback",
+        threadId,
+        code: error instanceof ApiError ? error.code : "UNKNOWN",
+      }),
+    );
+  }
 
   // Get suggested replies for this thread
   const replies = cached
@@ -296,6 +324,7 @@ gmailRoute.get("/:threadId", async (c) => {
         : null,
       replies,
       meetingRequests: meetings,
+      stale,
     }),
   );
 });
@@ -364,9 +393,8 @@ gmailRoute.post("/:threadId/reply", async (c) => {
   const env = getEnv(c.env);
   const db = createDatabase(env.databaseUrl);
   const userId = c.get("userId");
-  const user = c.get("user");
   const threadId = c.req.param("threadId");
-  const { regenerate, currentBody } = replyGenerateSchema.parse(await c.req.json().catch(() => ({})));
+  const { regenerate, currentBody, draftId } = replyGenerateSchema.parse(await c.req.json().catch(() => ({})));
 
   const [cached] = await db
     .select()
@@ -386,40 +414,159 @@ gmailRoute.post("/:threadId/reply", async (c) => {
     GOOGLE_SCOPE.GMAIL_READ,
   ]);
   const detail = await gmailGetThread(accessToken, threadId);
-  const latestIncoming = [...detail.messages]
-    .reverse()
-    .find((message) => !message.labelIds.includes("SENT"));
-
-  const replyParams = {
-    category: cached.category as "billing" | "scheduling" | "urgent" | "support" | "newsletter" | "general",
-    subject: cached.subject ?? "",
-    senderName: cached.fromName ?? "",
-    myName: user.name,
-    latestMessage:
-      latestIncoming?.bodyText || latestIncoming?.snippet || cached.snippet || "",
-  };
-
-  const { body: replyBody, template } = regenerate && currentBody
-    ? regenerateReply({ ...replyParams, currentBody })
-    : generateReply(replyParams);
-
-  // Store the draft
-  const [draft] = await db
-    .insert(suggestedReplies)
-    .values({
-      threadId: cached.id,
-      userId,
-      body: replyBody,
-      status: "draft",
-    })
-    .returning();
-
-  await logAction(db, userId, AuditAction.EMAIL_CLASSIFY, "suggested_reply", draft.id, {
-    threadId,
-    template,
+  const replyBody = await generateOpenRouterReply({
+    apiKey: env.openRouterApiKey,
+    subject: cached.subject ?? detail.subject ?? "",
+    messages: detail.messages,
+    currentBody: regenerate ? currentBody : undefined,
   });
 
-  return c.json(ok({ reply: draft, template }));
+  const existingDraft = draftId
+    ? (
+        await db
+          .select()
+          .from(suggestedReplies)
+          .where(
+            and(
+              eq(suggestedReplies.id, draftId),
+              eq(suggestedReplies.threadId, cached.id),
+              eq(suggestedReplies.userId, userId),
+            ),
+          )
+          .limit(1)
+      )[0]
+    : undefined;
+  const [draft] = existingDraft && existingDraft.status !== "sent"
+    ? await db
+        .update(suggestedReplies)
+        .set({ body: replyBody, status: "draft", approvedAt: null })
+        .where(eq(suggestedReplies.id, existingDraft.id))
+        .returning()
+    : await db
+        .insert(suggestedReplies)
+        .values({
+          threadId: cached.id,
+          userId,
+          body: replyBody,
+          status: "draft",
+        })
+        .returning();
+
+  await logAction(db, userId, AuditAction.EMAIL_REPLY_SUGGEST, "suggested_reply", draft.id, {
+    threadId,
+    model: OPENROUTER_REPLY_MODEL,
+  });
+
+  return c.json(ok({ reply: draft, model: OPENROUTER_REPLY_MODEL }));
+});
+
+// --- POST /:threadId/draft — save an editable draft without sending ---
+
+gmailRoute.post("/:threadId/draft", async (c) => {
+  const env = getEnv(c.env);
+  const db = createDatabase(env.databaseUrl);
+  const userId = c.get("userId");
+  const threadId = c.req.param("threadId");
+  const { body, draftId } = replySaveSchema.parse(await c.req.json());
+
+  const [cached] = await db
+    .select({ id: emailThreads.id })
+    .from(emailThreads)
+    .where(
+      and(
+        eq(emailThreads.userId, userId),
+        eq(emailThreads.gmailThreadId, threadId),
+      ),
+    );
+  if (!cached) throw ApiError.notFound("Thread not found in cache");
+
+  let existing = draftId
+    ? (
+        await db
+          .select()
+          .from(suggestedReplies)
+          .where(
+            and(
+              eq(suggestedReplies.id, draftId),
+              eq(suggestedReplies.threadId, cached.id),
+              eq(suggestedReplies.userId, userId),
+            ),
+          )
+          .limit(1)
+      )[0]
+    : undefined;
+
+  if (!existing && !draftId) {
+    existing = (
+      await db
+        .select()
+        .from(suggestedReplies)
+        .where(
+          and(
+            eq(suggestedReplies.threadId, cached.id),
+            eq(suggestedReplies.userId, userId),
+            eq(suggestedReplies.status, "draft"),
+          ),
+        )
+        .orderBy(desc(suggestedReplies.createdAt))
+        .limit(1)
+    )[0];
+  }
+
+  if (draftId && !existing) throw ApiError.notFound("Draft not found");
+  if (existing?.status === "sent") {
+    throw ApiError.conflict("A sent reply cannot be changed");
+  }
+
+  const [draft] = existing
+    ? await db
+        .update(suggestedReplies)
+        .set({ body, status: "draft", approvedAt: null })
+        .where(eq(suggestedReplies.id, existing.id))
+        .returning()
+    : await db
+        .insert(suggestedReplies)
+        .values({ threadId: cached.id, userId, body, status: "draft" })
+        .returning();
+
+  return c.json(ok({ reply: draft }));
+});
+
+// --- DELETE /:threadId/draft/:draftId — discard an unsent draft ---
+
+gmailRoute.delete("/:threadId/draft/:draftId", async (c) => {
+  const env = getEnv(c.env);
+  const db = createDatabase(env.databaseUrl);
+  const userId = c.get("userId");
+  const threadId = c.req.param("threadId");
+  const draftId = z.string().uuid().parse(c.req.param("draftId"));
+
+  const [cached] = await db
+    .select({ id: emailThreads.id })
+    .from(emailThreads)
+    .where(
+      and(
+        eq(emailThreads.userId, userId),
+        eq(emailThreads.gmailThreadId, threadId),
+      ),
+    );
+  if (!cached) throw ApiError.notFound("Thread not found in cache");
+
+  const [draft] = await db
+    .select()
+    .from(suggestedReplies)
+    .where(
+      and(
+        eq(suggestedReplies.id, draftId),
+        eq(suggestedReplies.threadId, cached.id),
+        eq(suggestedReplies.userId, userId),
+      ),
+    );
+  if (!draft) throw ApiError.notFound("Draft not found");
+  if (draft.status === "sent") throw ApiError.conflict("A sent reply cannot be discarded");
+
+  await db.delete(suggestedReplies).where(eq(suggestedReplies.id, draft.id));
+  return c.json(ok({ discarded: true }));
 });
 
 // --- POST /:threadId/reply/send — send user-approved reply ---
@@ -734,6 +881,50 @@ function parseImportanceReasons(raw: string | null | undefined): string[] {
   } catch {
     return [];
   }
+}
+
+function isGoogleActionRequired(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    ["GOOGLE_REAUTH_REQUIRED", "GOOGLE_PERMISSION_REQUIRED"].includes(error.code)
+  );
+}
+
+function cachedThreadDetail(
+  cached: typeof emailThreads.$inferSelect,
+): Awaited<ReturnType<typeof gmailGetThread>> {
+  const timestamp = cached.lastMessageDate ?? cached.updatedAt;
+  const internalDate = String(timestamp.getTime());
+  const message: GmailMessage = {
+    id: `cached-${cached.gmailThreadId}`,
+    threadId: cached.gmailThreadId,
+    snippet: cached.snippet ?? "",
+    labelIds: cached.hasUnread ? ["INBOX", "UNREAD"] : ["INBOX"],
+    headers: [],
+    bodyText: cached.snippet ?? "",
+    from: cached.fromEmail ?? "",
+    fromName: cached.fromName ?? "",
+    fromEmail: cached.fromEmail ?? "",
+    to: "",
+    subject: cached.subject ?? "",
+    date: timestamp.toISOString(),
+    messageId: "",
+    inReplyTo: null,
+    references: null,
+    internalDate,
+  };
+  return {
+    id: cached.gmailThreadId,
+    messages: [message],
+    lastMessage: message,
+    subject: cached.subject ?? "",
+    from: cached.fromEmail ?? "",
+    fromName: cached.fromName ?? "",
+    fromEmail: cached.fromEmail ?? "",
+    snippet: cached.snippet ?? "",
+    lastMessageDate: timestamp,
+    hasUnread: cached.hasUnread,
+  };
 }
 
 function getThreadParticipants(messages: GmailMessage[], myEmail: string): string[] {

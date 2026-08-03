@@ -110,6 +110,7 @@ export function EventDialog({
   const [description, setDescription] = useState("");
   const [link, setLink] = useState("");
   const [touched, setTouched] = useState(false);
+  const [deleteArmed, setDeleteArmed] = useState(false);
 
   // Recurrence state
   const [recurrenceRule, setRecurrenceRule] = useState("");
@@ -150,6 +151,7 @@ export function EventDialog({
   useEffect(() => {
     if (!open) return;
     setTouched(false);
+    setDeleteArmed(false);
     setTagInput("");
     setExerciseSearchQuery("");
     setExerciseSearchOpen(false);
@@ -783,17 +785,29 @@ export function EventDialog({
         {/* Footer */}
         <div className="flex items-center justify-between border-t border-border bg-muted/30 px-6 py-3">
           {isEdit && onDelete ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => onDelete(event.id)}
-              disabled={isSaving}
-              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-              Delete
-            </Button>
+            deleteArmed ? (
+              <div className="flex items-center gap-1.5">
+                <Button type="button" variant="ghost" size="sm" onClick={() => setDeleteArmed(false)} disabled={isSaving}>
+                  Keep
+                </Button>
+                <Button type="button" variant="destructive" size="sm" onClick={() => onDelete(event.id)} disabled={isSaving}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                  {event.source === "google_crm" ? "Confirm cancellation" : "Confirm delete"}
+                </Button>
+              </div>
+            ) : (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setDeleteArmed(true)}
+                disabled={isSaving}
+                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                {event.source === "google_crm" ? "Cancel meeting" : "Delete"}
+              </Button>
+            )
           ) : (
             <span />
           )}

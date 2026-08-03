@@ -24,6 +24,7 @@ export const Route = createFileRoute("/m")({
 function MobileShell() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const isLiveWorkout = /^\/m\/workouts\/[^/]+$/.test(pathname);
+  const isCrm = pathname === "/m/crm";
   const [sheetOpen, setSheetOpen] = useState(false);
   const [captureRequest, setCaptureRequest] =
     useState<QuickCaptureRequest>();
@@ -49,7 +50,7 @@ function MobileShell() {
       <NotificationBanner />
 
       <main
-        className={`m-page-shell mx-auto w-full max-w-lg flex-1${isLiveWorkout ? " is-live-workout" : ""}`}
+        className={`m-page-shell mx-auto w-full max-w-lg flex-1${isLiveWorkout ? " is-live-workout" : ""}${isCrm ? " is-crm" : ""}`}
       >
         <Outlet />
       </main>

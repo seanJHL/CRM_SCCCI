@@ -39,6 +39,25 @@ const REVOKE_URL = "https://oauth2.googleapis.com/revoke";
 const JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs";
 
 /**
+ * Fail fast when the Worker has not been provisioned with its Google OAuth
+ * client. This avoids redirecting users to an unusable Google consent URL.
+ */
+export function assertGoogleOAuthConfigured(env: EnvConfig): void {
+  const missing: string[] = [];
+  if (!env.googleClientId.trim()) missing.push("GOOGLE_CLIENT_ID");
+  if (!env.googleClientSecret.trim()) missing.push("GOOGLE_CLIENT_SECRET");
+
+  if (missing.length > 0) {
+    throw new ApiError(
+      503,
+      "GOOGLE_OAUTH_NOT_CONFIGURED",
+      "Google sign-in is not configured yet. Add the Google OAuth client credentials and try again.",
+      { missing },
+    );
+  }
+}
+
+/**
  * Build the Google OAuth consent URL.
  * Uses access_type=offline for refresh tokens. Existing refresh tokens are
  * retained when Google omits a new one on later sign-ins.
@@ -47,6 +66,7 @@ export function getAuthUrl(
   env: EnvConfig,
   options: { state: string; nonce: string; codeChallenge: string },
 ): string {
+  assertGoogleOAuthConfigured(env);
   const search = new URLSearchParams({
     client_id: env.googleClientId,
     redirect_uri: env.googleRedirectUri,
@@ -81,6 +101,7 @@ export async function exchangeCode(
   code: string,
   codeVerifier: string,
 ): Promise<TokenResponse> {
+  assertGoogleOAuthConfigured(env);
   const body = new URLSearchParams({
     code,
     client_id: env.googleClientId,
@@ -115,6 +136,7 @@ export async function refreshAccessToken(
   env: EnvConfig,
   refreshToken: string,
 ): Promise<{ access_token: string; expires_in: number }> {
+  assertGoogleOAuthConfigured(env);
   const body = new URLSearchParams({
     client_id: env.googleClientId,
     client_secret: env.googleClientSecret,

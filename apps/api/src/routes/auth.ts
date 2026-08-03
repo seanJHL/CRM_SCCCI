@@ -22,6 +22,7 @@ import {
 } from "@/lib/session";
 import {
   getAuthUrl,
+  assertGoogleOAuthConfigured,
   exchangeCode,
   verifyIdToken,
   storeGoogleAccount,
@@ -75,6 +76,7 @@ authRoutes.use("/disconnect", authMiddleware);
 
 authRoutes.get("/google", async (c) => {
   const env = getEnv(c.env);
+  assertGoogleOAuthConfigured(env);
 
   const state = randomUrlSafeToken();
   const nonce = randomUrlSafeToken();

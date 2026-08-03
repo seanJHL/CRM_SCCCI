@@ -10,7 +10,7 @@
  * This file is served statically from /sw.js and registered by the mobile app.
  */
 
-const CACHE_VERSION = "ember-v3";
+const CACHE_VERSION = "ember-v4";
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const API_CACHE = `${CACHE_VERSION}-api`;
 
@@ -61,6 +61,10 @@ self.addEventListener("fetch", (event) => {
 
   // Only handle http(s)
   if (!url.protocol.startsWith("http")) return;
+
+  // Never intercept local development. Vite module URLs are intentionally
+  // stable and must always come from the live development server.
+  if (url.hostname === "localhost" || url.hostname === "127.0.0.1") return;
 
   // API calls: network-first, fall back to last-good cached response.
   if (url.pathname.startsWith("/api/")) {

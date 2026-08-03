@@ -33,13 +33,14 @@ import {
   detectMeetingRequest,
 } from "@/lib/scheduler";
 import { logAction, AuditAction } from "@/lib/audit";
+import { syncCrmBookingsToEmberCalendar } from "@/lib/calendar-sync";
 
 const calendarCrmRoute = new Hono<AppBindings>();
 
 // --- Zod schemas ---
 
 const parseScheduleSchema = z.object({
-  text: z.string().min(1),
+  text: z.string().min(1).max(50_000),
 });
 
 const checkAvailabilitySchema = z.object({
@@ -110,6 +111,8 @@ calendarCrmRoute.get("/events", async (c) => {
     .select()
     .from(calendarBookings)
     .where(eq(calendarBookings.userId, userId));
+
+  await syncCrmBookingsToEmberCalendar(db, userId);
 
   return c.json(ok({ events, bookings }));
 });
@@ -313,6 +316,10 @@ calendarCrmRoute.post("/events", async (c) => {
     })
     .returning();
 
+  // Ember Calendar is the canonical in-app calendar. This upsert uses the CRM
+  // booking id as its idempotency key, so retries never duplicate meetings.
+  await syncCrmBookingsToEmberCalendar(db, userId);
+
   if (input.sourceThreadId) {
     await db
       .update(emailThreads)
@@ -436,6 +443,8 @@ calendarCrmRoute.patch("/events/:id", async (c) => {
     .where(eq(calendarBookings.id, bookingId))
     .returning();
 
+  await syncCrmBookingsToEmberCalendar(db, userId);
+
   await logAction(db, userId, AuditAction.CALENDAR_UPDATE, "calendar_booking", bookingId, {
     title: updates.title,
   });
@@ -479,6 +488,8 @@ calendarCrmRoute.delete("/events/:id", async (c) => {
     .update(calendarBookings)
     .set({ status: "cancelled" })
     .where(eq(calendarBookings.id, bookingId));
+
+  await syncCrmBookingsToEmberCalendar(db, userId);
 
   await logAction(db, userId, AuditAction.CALENDAR_CANCEL, "calendar_booking", bookingId, {
     title: booking.title,

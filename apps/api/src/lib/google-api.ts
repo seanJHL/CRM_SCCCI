@@ -111,7 +111,7 @@ export async function gmailListThreads(
   accessToken: string,
   maxResults = 50,
 ): Promise<GmailThreadSummary[]> {
-  const res = await fetch(
+  const res = await fetchGoogleRead(
     `${GMAIL_BASE}/threads?maxResults=${maxResults}`,
     {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -133,7 +133,7 @@ export async function gmailGetThread(
   accessToken: string,
   threadId: string,
 ): Promise<GmailThreadDetail> {
-  const res = await fetch(
+  const res = await fetchGoogleRead(
     `${GMAIL_BASE}/threads/${encodeURIComponent(threadId)}?format=full`,
     {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -166,7 +166,7 @@ export async function gmailGetThread(
     const get = (name: string) =>
       headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";
 
-    const bodyText = extractMessageBody(msg.payload);
+    const bodyText = cleanEmailText(extractMessageBody(msg.payload));
 
     const from = get("From");
     const { name, email } = parseFromHeader(from);
@@ -458,7 +458,9 @@ export async function calendarDeleteEvent(
     },
   );
 
-  if (!res.ok && res.status !== 410) {
+  // Deletion is idempotent: an already removed Google event is the desired
+  // final state and must not block local CRM/Ember cleanup.
+  if (!res.ok && res.status !== 404 && res.status !== 410) {
     await throwGoogleApiError(res, "Google Calendar", "cancel event");
   }
 }
@@ -513,6 +515,42 @@ function htmlToText(html: string): string {
     .trim();
 }
 
+/** Remove remote-image placeholders and tracking URLs from plain-text bodies. */
+function cleanEmailText(value: string): string {
+  const lines = value.replace(/\r\n/g, "\n").split("\n");
+  const visible: string[] = [];
+  let skippingRemoteAsset = false;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    const trimmed = line.trim();
+    const next = lines[index + 1]?.trim() ?? "";
+
+    if (skippingRemoteAsset) {
+      if (trimmed.endsWith(")")) skippingRemoteAsset = false;
+      continue;
+    }
+    if (/\($/.test(trimmed) && /^https?:\/\//i.test(next)) {
+      skippingRemoteAsset = true;
+      continue;
+    }
+    if (
+      /^https?:\/\//i.test(trimmed) &&
+      (trimmed.length > 90 || /(?:ablink|click|track|utm_|mc_[ce]id|trk)/i.test(trimmed))
+    ) {
+      continue;
+    }
+
+    const cleanedLine = line
+      .replace(/https?:\/\/\S*(?:ablink|click|track|utm_|mc_[ce]id|trk)\S*/gi, "")
+      .replace(/https?:\/\/\S{120,}/gi, "")
+      .trimEnd();
+    if (cleanedLine.trim() || visible.at(-1)?.trim()) visible.push(cleanedLine);
+  }
+
+  return visible.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function sanitiseMailHeader(value: string): string {
   return value.replace(/[\r\n\0]+/g, " ").trim();
 }
@@ -522,7 +560,7 @@ async function throwGoogleApiError(
   service: string,
   operation: string,
 ): Promise<never> {
-  const raw = await response.text();
+  const raw = await readLimitedText(response, 64 * 1024);
   let reason = response.statusText;
   try {
     const parsed = JSON.parse(raw) as {
@@ -567,6 +605,55 @@ async function throwGoogleApiError(
     `${service} could not ${operation}. Please try again.`,
     { status: response.status, reason },
   );
+}
+
+/** Retry idempotent Google reads for rate limits and transient upstream errors. */
+async function fetchGoogleRead(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  const delays = [200, 600];
+  let response = await fetch(input, init);
+
+  for (const delay of delays) {
+    if (!isTransientGoogleStatus(response.status)) return response;
+    await response.body?.cancel();
+    await new Promise<void>((resolve) => setTimeout(resolve, delay));
+    response = await fetch(input, init);
+  }
+
+  return response;
+}
+
+function isTransientGoogleStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+async function readLimitedText(
+  response: Response,
+  maxBytes: number,
+): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let received = 0;
+  let text = "";
+
+  try {
+    while (received < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const remaining = maxBytes - received;
+      const chunk = value.byteLength > remaining ? value.slice(0, remaining) : value;
+      received += chunk.byteLength;
+      text += decoder.decode(chunk, { stream: received < maxBytes });
+      if (value.byteLength > remaining) break;
+    }
+    text += decoder.decode();
+    return text;
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
 }
 
 function parseFromHeader(from: string): { name: string; email: string } {

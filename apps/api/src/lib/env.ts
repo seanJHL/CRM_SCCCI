@@ -16,6 +16,7 @@ export interface EnvConfig {
   googleRedirectUri: string;
   encryptionKey: string;
   sessionSecret: string;
+  openRouterApiKey: string;
   isProduction: boolean;
   isPreview: boolean;
   isSecureDeployment: boolean;
@@ -36,9 +37,10 @@ export function getEnv(bindings?: Partial<Bindings>): EnvConfig {
     vapidSubject: bindings?.VAPID_SUBJECT ?? "mailto:push@ember.app",
     googleClientId: bindings?.GOOGLE_CLIENT_ID ?? "",
     googleClientSecret: bindings?.GOOGLE_CLIENT_SECRET ?? "",
-    googleRedirectUri: bindings?.GOOGLE_REDIRECT_URI ?? "http://localhost:8787/api/auth/google/callback",
+    googleRedirectUri: bindings?.GOOGLE_REDIRECT_URI ?? "http://localhost:8788/api/auth/google/callback",
     encryptionKey: bindings?.ENCRYPTION_KEY ?? "",
     sessionSecret: bindings?.SESSION_SECRET ?? bindings?.AUTH_SECRET ?? "",
+    openRouterApiKey: bindings?.OPENROUTER_API_KEY ?? "",
     isProduction: environment === "production",
     isPreview: environment === "preview",
     isSecureDeployment: environment !== "development",

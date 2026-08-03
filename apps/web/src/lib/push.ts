@@ -43,6 +43,13 @@ export function isServiceWorkerSupported(): boolean {
 /** Register the Ember service worker independently of notification support. */
 export async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
   if (!isServiceWorkerSupported()) return null;
+  if (import.meta.env.DEV) {
+    const registrations = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(
+      registrations.map((registration) => registration.unregister()),
+    );
+    return null;
+  }
   try {
     const registration = await navigator.serviceWorker.register("/sw.js", {
       scope: "/",

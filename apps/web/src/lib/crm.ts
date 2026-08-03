@@ -109,6 +109,7 @@ export interface ThreadDetailData {
   } | null;
   replies: SuggestedReply[];
   meetingRequests: MeetingRequest[];
+  stale?: boolean;
 }
 
 export interface GmailStats {

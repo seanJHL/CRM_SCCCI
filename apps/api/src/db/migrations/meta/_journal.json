@@ -71,6 +71,13 @@
       "when": 1785751200000,
       "tag": "0009_crm_google_integration",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1785758400000,
+      "tag": "0010_unify_crm_calendar",
+      "breakpoints": true
     }
   ]
 }

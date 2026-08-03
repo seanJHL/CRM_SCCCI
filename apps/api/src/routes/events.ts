@@ -1,6 +1,6 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { z } from "zod";
-import { eq, gte, lte, and, asc, or } from "drizzle-orm";
+import { eq, gte, lte, and, asc, or, isNull } from "drizzle-orm";
 import type { AppBindings } from "@/types";
 import { createDatabase } from "@/db";
 import {
@@ -8,9 +8,16 @@ import {
   eventCompletions,
   eventExercises,
   exercises,
+  calendarBookings,
 } from "@/db/schema";
 import { ApiError, ok } from "@/lib/utils";
 import { getEnv } from "@/lib/env";
+import { readSessionCookie, getAuthUser } from "@/lib/session";
+import { getValidAccessToken, GOOGLE_SCOPE } from "@/lib/google-oauth";
+import { calendarDeleteEvent, calendarUpdateEvent } from "@/lib/google-api";
+import { syncCrmBookingsToEmberCalendar } from "@/lib/calendar-sync";
+import { logAction, AuditAction } from "@/lib/audit";
+import type { AuthUser } from "@/types";
 
 const exerciseItemSchema = z.object({
   exerciseId: z.string().uuid(),
@@ -40,6 +47,29 @@ const eventSchema = z.object({
 const eventUpdateSchema = eventSchema.partial();
 
 const eventsRoute = new Hono<AppBindings>();
+
+async function getOptionalAuthUser(
+  c: Context<AppBindings>,
+  db: ReturnType<typeof createDatabase>,
+  sessionSecret: string,
+): Promise<AuthUser | null> {
+  const token = readSessionCookie(c);
+  if (!token) return null;
+  return getAuthUser(db, token, sessionSecret);
+}
+
+async function assertEventAccess(
+  c: Context<AppBindings>,
+  db: ReturnType<typeof createDatabase>,
+  sessionSecret: string,
+  ownerUserId: string | null,
+): Promise<AuthUser | null> {
+  const user = await getOptionalAuthUser(c, db, sessionSecret);
+  if (ownerUserId && user?.id !== ownerUserId) {
+    throw ApiError.unauthorized("Sign in to access this calendar meeting");
+  }
+  return user;
+}
 
 async function getEventCompletions(
   db: ReturnType<typeof createDatabase>,
@@ -99,28 +129,41 @@ eventsRoute.get("/", async (c) => {
   const db = createDatabase(env.databaseUrl);
   const from = c.req.query("from");
   const to = c.req.query("to");
+  const user = await getOptionalAuthUser(c, db, env.sessionSecret);
+
+  if (user) {
+    await syncCrmBookingsToEmberCalendar(db, user.id);
+  }
 
   let query = db.select().from(events);
+  const visibleToUser = user
+    ? or(isNull(events.ownerUserId), eq(events.ownerUserId, user.id))
+    : isNull(events.ownerUserId);
 
   if (from && to) {
     const rangeStart = new Date(from);
     const rangeEnd = new Date(to);
     query = query.where(
-      or(
+      and(
+        visibleToUser,
+        or(
         // One-off and long-running events that overlap the requested range.
-        and(
-          lte(events.startAt, rangeEnd),
-          gte(events.endAt, rangeStart),
-        ),
-        // A recurring series may begin before the visible range. Return the
-        // source event so the client can expand the occurrences it needs.
-        and(
-          eq(events.recurrenceStatus, "active"),
-          lte(events.startAt, rangeEnd),
-          gte(events.recurrenceExpiryAt, rangeStart),
+          and(
+            lte(events.startAt, rangeEnd),
+            gte(events.endAt, rangeStart),
+          ),
+          // A recurring series may begin before the visible range. Return the
+          // source event so the client can expand the occurrences it needs.
+          and(
+            eq(events.recurrenceStatus, "active"),
+            lte(events.startAt, rangeEnd),
+            gte(events.recurrenceExpiryAt, rangeStart),
+          ),
         ),
       ),
     ) as typeof query;
+  } else {
+    query = query.where(visibleToUser) as typeof query;
   }
 
   const rows = await query.orderBy(events.startAt);
@@ -143,6 +186,7 @@ eventsRoute.get("/:id", async (c) => {
   const id = c.req.param("id");
   const [row] = await db.select().from(events).where(eq(events.id, id));
   if (!row) throw ApiError.notFound(`Event ${id} not found`);
+  await assertEventAccess(c, db, env.sessionSecret, row.ownerUserId);
   const exs = await getEventExercises(db, id);
   const completions = await getEventCompletions(db, id);
   return c.json(ok({ ...row, exercises: exs, completions }));
@@ -200,6 +244,56 @@ eventsRoute.patch("/:id", async (c) => {
   const db = createDatabase(env.databaseUrl);
   const id = c.req.param("id");
   const body = eventUpdateSchema.parse(await c.req.json());
+  const [existingEvent] = await db
+    .select()
+    .from(events)
+    .where(eq(events.id, id));
+  if (!existingEvent) throw ApiError.notFound(`Event ${id} not found`);
+
+  const owner = await assertEventAccess(
+    c,
+    db,
+    env.sessionSecret,
+    existingEvent.ownerUserId,
+  );
+
+  if (existingEvent.source === "google_crm") {
+    if (!owner || !existingEvent.crmBookingId || !existingEvent.googleEventId) {
+      throw ApiError.unauthorized("Sign in to update this Google Calendar meeting");
+    }
+    const [booking] = await db
+      .select()
+      .from(calendarBookings)
+      .where(
+        and(
+          eq(calendarBookings.id, existingEvent.crmBookingId),
+          eq(calendarBookings.userId, owner.id),
+        ),
+      );
+    if (!booking) throw ApiError.notFound("CRM booking not found");
+
+    const accessToken = await getValidAccessToken(db, env, owner.id, [
+      GOOGLE_SCOPE.CALENDAR_EVENTS,
+    ]);
+    await calendarUpdateEvent(accessToken, existingEvent.googleEventId, {
+      summary: body.title,
+      description: body.description,
+      start: body.startAt,
+      end: body.endAt,
+    });
+
+    await db
+      .update(calendarBookings)
+      .set({
+        ...(body.title !== undefined && { title: body.title }),
+        ...(body.description !== undefined && {
+          description: body.description || null,
+        }),
+        ...(body.startAt !== undefined && { startAt: new Date(body.startAt) }),
+        ...(body.endAt !== undefined && { endAt: new Date(body.endAt) }),
+      })
+      .where(eq(calendarBookings.id, booking.id));
+  }
 
   const updates: Record<string, unknown> = { updatedAt: new Date() };
   if (body.title !== undefined) updates.title = body.title;
@@ -234,6 +328,17 @@ eventsRoute.patch("/:id", async (c) => {
     .where(eq(events.id, id))
     .returning();
   if (!updated) throw ApiError.notFound(`Event ${id} not found`);
+
+  if (existingEvent.source === "google_crm" && owner) {
+    await logAction(
+      db,
+      owner.id,
+      AuditAction.CALENDAR_UPDATE,
+      "calendar_booking",
+      existingEvent.crmBookingId,
+      { title: body.title, start: body.startAt, end: body.endAt },
+    );
+  }
 
   // Replace exercises if provided in the update
   if (body.exercises !== undefined) {
@@ -294,11 +399,58 @@ eventsRoute.delete("/:id", async (c) => {
   const env = getEnv(c.env);
   const db = createDatabase(env.databaseUrl);
   const id = c.req.param("id");
+  const confirmation = z
+    .object({ confirmed: z.boolean().optional() })
+    .parse(await c.req.json().catch(() => ({})));
+  const [existingEvent] = await db
+    .select()
+    .from(events)
+    .where(eq(events.id, id));
+  if (!existingEvent) throw ApiError.notFound(`Event ${id} not found`);
+
+  const owner = await assertEventAccess(
+    c,
+    db,
+    env.sessionSecret,
+    existingEvent.ownerUserId,
+  );
+
+  if (existingEvent.source === "google_crm") {
+    if (!confirmation.confirmed) {
+      throw ApiError.badRequest(
+        "Explicit confirmation is required to cancel a Google Calendar meeting",
+      );
+    }
+    if (!owner || !existingEvent.crmBookingId || !existingEvent.googleEventId) {
+      throw ApiError.unauthorized("Sign in to cancel this Google Calendar meeting");
+    }
+    const accessToken = await getValidAccessToken(db, env, owner.id, [
+      GOOGLE_SCOPE.CALENDAR_EVENTS,
+    ]);
+    await calendarDeleteEvent(accessToken, existingEvent.googleEventId);
+    await db
+      .update(calendarBookings)
+      .set({ status: "cancelled" })
+      .where(
+        and(
+          eq(calendarBookings.id, existingEvent.crmBookingId),
+          eq(calendarBookings.userId, owner.id),
+        ),
+      );
+    await logAction(
+      db,
+      owner.id,
+      AuditAction.CALENDAR_CANCEL,
+      "calendar_booking",
+      existingEvent.crmBookingId,
+      { title: existingEvent.title },
+    );
+  }
+
   const [deleted] = await db
     .delete(events)
     .where(eq(events.id, id))
     .returning();
-  if (!deleted) throw ApiError.notFound(`Event ${id} not found`);
   return c.json(ok(deleted, "Event deleted"));
 });
 

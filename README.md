@@ -34,8 +34,8 @@ pnpm dev
 ```
 
 - Web: `http://localhost:3001/login`
-- API: `http://localhost:8787/api/health`
-- OAuth callback: `http://localhost:8787/api/auth/google/callback`
+- API: `http://localhost:8788/api/health`
+- OAuth callback: `http://localhost:8788/api/auth/google/callback`
 
 ## Google Cloud configuration
 
@@ -72,6 +72,7 @@ Set these in `.dev.vars` locally and as Cloudflare Worker secrets for preview/pr
 - `GOOGLE_CLIENT_SECRET`
 - `ENCRYPTION_KEY` — base64-encoded 32-byte AES-GCM key
 - `SESSION_SECRET` — high-entropy HMAC key
+- `OPENROUTER_API_KEY` — server-only key for user-requested reply suggestions
 - `AUTH_SECRET` — retained for existing API features
 - Web Push VAPID keys used by the existing reminder features
 
@@ -84,6 +85,7 @@ pnpm exec wrangler secret put GOOGLE_CLIENT_ID --env production
 pnpm exec wrangler secret put GOOGLE_CLIENT_SECRET --env production
 pnpm exec wrangler secret put ENCRYPTION_KEY --env production
 pnpm exec wrangler secret put SESSION_SECRET --env production
+pnpm exec wrangler secret put OPENROUTER_API_KEY --env production
 ```
 
 `GOOGLE_REDIRECT_URI` and `CORS_ORIGIN` are environment-specific non-secret values in `wrangler.jsonc`.
@@ -98,7 +100,8 @@ The current frontend and API production URLs are on different sites, so the sess
 - Access and refresh tokens are AES-256-GCM encrypted at rest and refreshed server-side.
 - Revoked/expired tokens and missing scopes return actionable `GOOGLE_REAUTH_REQUIRED` or `GOOGLE_PERMISSION_REQUIRED` errors.
 - Gmail bodies are fetched on demand and are not persisted. Cached records contain only the metadata needed for the CRM.
-- Classification and draft generation are local, rules-based operations; no Gmail or Calendar data is sent to an external AI provider or used for model training.
+- Classification remains local. Only after a user clicks **Suggest Message Reply**, a minimized recent thread context is sent to OpenRouter using `deepseek/deepseek-v4-flash`; email addresses, phone numbers, tokens, and links are masked where possible, and the request disallows provider data collection.
+- AI output is stored only as an editable draft. It is never sent until the user reviews it and completes the final Gmail confirmation.
 - Audit details are PII-masked before storage.
 - Disconnect revokes Google access and clears CRM data. Delete removes the user, every session, encrypted credentials, cached records, bookings, and audit logs.
 

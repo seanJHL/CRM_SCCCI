@@ -20,12 +20,14 @@ export interface Bindings {
   GOOGLE_CLIENT_ID: string;
   /** Google OAuth 2.0 client secret (secret) */
   GOOGLE_CLIENT_SECRET: string;
-  /** Google OAuth 2.0 redirect URI (e.g. http://localhost:8787/api/auth/google/callback) */
+  /** Google OAuth 2.0 redirect URI (e.g. http://localhost:8788/api/auth/google/callback) */
   GOOGLE_REDIRECT_URI: string;
   /** 32-byte base64 key for AES-GCM token encryption (secret) */
   ENCRYPTION_KEY: string;
   /** Secret for hashing session tokens (secret) */
   SESSION_SECRET: string;
+  /** OpenRouter API key used only for user-requested reply suggestions (secret) */
+  OPENROUTER_API_KEY?: string;
 }
 
 /**

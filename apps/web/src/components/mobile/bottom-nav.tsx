@@ -1,11 +1,12 @@
 import { Link } from "@tanstack/react-router";
 import { useRouterState } from "@tanstack/react-router";
-import { CircleDot, CalendarDays, Dumbbell, Bell } from "lucide-react";
+import { CircleDot, CalendarDays, Dumbbell, Bell, Mail } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const TABS = [
   { to: "/m", label: "Today", icon: CircleDot, match: (p: string) => p === "/m" },
   { to: "/m/calendar", label: "Calendar", icon: CalendarDays, match: (p: string) => p.startsWith("/m/calendar") },
+  { to: "/m/crm", label: "CRM", icon: Mail, match: (p: string) => p.startsWith("/m/crm") },
   { to: "/m/workouts", label: "Train", icon: Dumbbell, match: (p: string) => p.startsWith("/m/workouts") || p.startsWith("/m/habits") },
   { to: "/m/reminders", label: "Alerts", icon: Bell, match: (p: string) => p.startsWith("/m/reminders") },
 ] as const;
@@ -20,7 +21,7 @@ export function BottomNav() {
     >
       <div className="absolute inset-0 border-t border-white/10 bg-[#171d21]/95 shadow-[0_-12px_30px_rgba(0,0,0,0.28)] backdrop-blur-xl" />
 
-      <div className="relative mx-auto grid max-w-lg grid-cols-4 px-1.5 pt-1">
+      <div className="relative mx-auto grid max-w-lg grid-cols-5 px-1.5 pt-1">
         {TABS.map((tab) => {
           const active = tab.match(pathname);
           const Icon = tab.icon;

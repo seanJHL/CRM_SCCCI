@@ -62,6 +62,10 @@ export interface Event {
   category: "meeting" | "shift" | "personal" | "deadline";
   tags: string | null;
   link: string | null;
+  source: "ember" | "google_crm";
+  ownerUserId: string | null;
+  googleEventId: string | null;
+  crmBookingId: string | null;
   exercises?: EventExercise[];
   completions?: EventCompletion[];
   createdAt: string;

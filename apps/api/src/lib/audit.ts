@@ -14,6 +14,7 @@ type Database = NeonHttpDatabase<typeof schema>;
 /** Standard audit action names. */
 export const AuditAction = {
   EMAIL_SEND: "email.send",
+  EMAIL_REPLY_SUGGEST: "email.reply_suggest",
   EMAIL_CLASSIFY: "email.classify",
   EMAIL_STATUS_UPDATE: "email.status_update",
   CALENDAR_CREATE: "calendar.create",

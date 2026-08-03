@@ -35,6 +35,13 @@ export const events = pgTable("events", {
   category: text("category").notNull().default("meeting"), // meeting | shift | personal | deadline
   tags: text("tags"), // comma-separated free-form tags, e.g. "deep-work,health"
   link: text("link"), // URL for video conferencing or external resource (Zoom, Meet, etc.)
+  // Integration metadata. Legacy Ember events keep source="ember" and no
+  // owner; OAuth-backed CRM meetings are private to their Google account and
+  // deduplicated by the originating CRM booking.
+  source: text("source").notNull().default("ember"),
+  ownerUserId: uuid("owner_user_id"),
+  googleEventId: text("google_event_id"),
+  crmBookingId: uuid("crm_booking_id"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -42,7 +49,13 @@ export const events = pgTable("events", {
     .notNull()
     .defaultNow(),
   lastNotifiedAt: timestamp("last_notified_at", { withTimezone: true }),
-});
+}, (table) => [
+  uniqueIndex("events_crm_booking_unique").on(table.crmBookingId),
+  uniqueIndex("events_owner_google_event_unique").on(
+    table.ownerUserId,
+    table.googleEventId,
+  ),
+]);
 
 // Completion is stored per occurrence so checking off one date in a recurring
 // series does not complete every past and future occurrence.

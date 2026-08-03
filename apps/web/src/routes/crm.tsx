@@ -6,18 +6,15 @@ import {
   Archive,
   CalendarDays,
   Check,
-  ChevronRight,
   Database,
-  ExternalLink,
   Inbox,
   Info,
   Loader2,
   LogOut,
   Mail,
-  MapPin,
-  MessageSquare,
   RefreshCw,
   Search,
+  Save,
   Send,
   Settings,
   ShieldCheck,
@@ -30,14 +27,11 @@ import { api, ApiClientError } from "@/lib/api";
 import {
   type AuditLog,
   type AvailabilityResult,
-  type CalendarBooking,
-  type CalendarData,
   type EmailCategory,
   type EmailPriority,
   type EmailStatus,
   type EmailThread,
   type GmailStats,
-  type MeetingRequestListItem,
   type ParsedSchedule,
   type PrivacySummary,
   type SessionData,
@@ -47,6 +41,7 @@ import {
   googleSignInUrl,
   loadSession,
 } from "@/lib/crm";
+import { queryKeys } from "@/lib/query-keys";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -72,10 +67,10 @@ export const Route = createFileRoute("/crm")({
     }
     return { session };
   },
-  component: CrmDashboard,
+  component: CrmRoutePage,
 });
 
-type DashboardView = "inbox" | "schedule" | "meetings" | "privacy";
+type DashboardView = "inbox" | "privacy";
 type AccountAction = "disconnect" | "delete" | "logout" | null;
 
 const CATEGORIES: EmailCategory[] = [
@@ -96,8 +91,12 @@ const STATUSES: EmailStatus[] = [
   "dismissed",
 ];
 
-function CrmDashboard() {
-  const { session: initialSession } = Route.useRouteContext();
+function CrmRoutePage() {
+  const { session } = Route.useRouteContext();
+  return <CrmDashboard initialSession={session} />;
+}
+
+export function CrmDashboard({ initialSession }: { initialSession: SessionData }) {
   const queryClient = useQueryClient();
   const [view, setView] = useState<DashboardView>("inbox");
   const [category, setCategory] = useState("");
@@ -109,6 +108,8 @@ function CrmDashboard() {
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(new Set());
   const [replyBody, setReplyBody] = useState("");
   const [replyDraftId, setReplyDraftId] = useState<string | null>(null);
+  const [draftHydratedFor, setDraftHydratedFor] = useState<string | null>(null);
+  const [composerOpen, setComposerOpen] = useState(false);
   const [sendConfirmationOpen, setSendConfirmationOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -133,27 +134,34 @@ function CrmDashboard() {
         `/api/gmail?${params}`,
       );
     },
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
   });
   const statsQuery = useQuery({
     queryKey: ["crm", "stats"],
     queryFn: () => api.get<{ stats: GmailStats }>("/api/gmail/stats"),
   });
-  const calendarQuery = useQuery({
-    queryKey: ["crm", "calendar"],
-    queryFn: () => api.get<CalendarData>("/api/calendar-crm/events"),
-  });
-  const meetingRequestsQuery = useQuery({
-    queryKey: ["crm", "meeting-requests"],
+  const gmailSyncQuery = useQuery({
+    queryKey: ["crm", "gmail-sync"],
     queryFn: () =>
-      api.get<{ meetingRequests: MeetingRequestListItem[] }>(
-        "/api/gmail/meeting-requests",
-      ),
+      api.get<{ threads: EmailThread[] }>("/api/gmail?refresh=true"),
+    staleTime: 90_000,
+    refetchInterval: (query) =>
+      isActionRequired(query.state.error) ? false : 120_000,
+    refetchOnWindowFocus: true,
+    retry: (failureCount, error) =>
+      !isActionRequired(error) && failureCount < 2,
   });
   const threadDetailQuery = useQuery({
     queryKey: ["crm", "thread", selectedThreadId],
     queryFn: () =>
       api.get<ThreadDetailData>(`/api/gmail/${selectedThreadId}`),
     enabled: Boolean(selectedThreadId),
+    refetchInterval: (query) =>
+      selectedThreadId && !isActionRequired(query.state.error) ? 60_000 : false,
+    refetchOnWindowFocus: true,
+    retry: (failureCount, error) =>
+      !isActionRequired(error) && failureCount < 2,
   });
 
   const threads = threadsQuery.data?.threads ?? [];
@@ -162,30 +170,36 @@ function CrmDashboard() {
   );
 
   useEffect(() => {
+    if (!selectedThreadId || !threadDetailQuery.data) return;
+    if (draftHydratedFor === selectedThreadId) return;
     const latestDraft = threadDetailQuery.data?.replies.find(
       (reply) => reply.status !== "sent",
     );
     setReplyBody(latestDraft?.body ?? "");
     setReplyDraftId(latestDraft?.id ?? null);
-  }, [selectedThreadId, threadDetailQuery.data?.replies]);
+    setDraftHydratedFor(selectedThreadId);
+  }, [draftHydratedFor, selectedThreadId, threadDetailQuery.data]);
 
   const invalidateInbox = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["crm", "threads"] }),
       queryClient.invalidateQueries({ queryKey: ["crm", "stats"] }),
       queryClient.invalidateQueries({ queryKey: ["crm", "thread"] }),
-      queryClient.invalidateQueries({ queryKey: ["crm", "meeting-requests"] }),
     ]);
   };
 
-  const syncMutation = useMutation({
-    mutationFn: () =>
-      api.get<{ threads: EmailThread[] }>("/api/gmail?refresh=true"),
-    onSuccess: async () => {
+  useEffect(() => {
+    if (!gmailSyncQuery.dataUpdatedAt) return;
+    void invalidateInbox();
+  }, [gmailSyncQuery.dataUpdatedAt]);
+
+  const refreshGmail = async () => {
+    const result = await gmailSyncQuery.refetch();
+    if (!result.error) {
       setNotice("Gmail is up to date.");
       await invalidateInbox();
-    },
-  });
+    }
+  };
   const updateThreadMutation = useMutation({
     mutationFn: (input: {
       threadId: string;
@@ -197,12 +211,43 @@ function CrmDashboard() {
     mutationFn: (regenerate: boolean) =>
       api.post<{ reply: SuggestedReply }>(
         `/api/gmail/${selectedThreadId}/reply`,
-        { regenerate, currentBody: replyBody },
+        { regenerate, currentBody: replyBody, draftId: replyDraftId ?? undefined },
       ),
     onSuccess: (data) => {
       setReplyBody(data.reply.body);
       setReplyDraftId(data.reply.id);
       setNotice("A reviewable draft was generated. Nothing has been sent.");
+    },
+  });
+  const saveDraftMutation = useMutation({
+    mutationFn: () =>
+      api.post<{ reply: SuggestedReply }>(
+        `/api/gmail/${selectedThreadId}/draft`,
+        { body: replyBody, draftId: replyDraftId ?? undefined },
+      ),
+    onSuccess: async (data) => {
+      setReplyDraftId(data.reply.id);
+      setNotice("Draft saved. Nothing has been sent.");
+      await queryClient.invalidateQueries({
+        queryKey: ["crm", "thread", selectedThreadId],
+      });
+    },
+  });
+  const discardDraftMutation = useMutation({
+    mutationFn: async () => {
+      if (!replyDraftId) return { discarded: true };
+      return api.delete<{ discarded: boolean }>(
+        `/api/gmail/${selectedThreadId}/draft/${replyDraftId}`,
+      );
+    },
+    onSuccess: async () => {
+      setReplyBody("");
+      setReplyDraftId(null);
+      setComposerOpen(false);
+      setNotice("Draft discarded.");
+      await queryClient.invalidateQueries({
+        queryKey: ["crm", "thread", selectedThreadId],
+      });
     },
   });
   const sendReplyMutation = useMutation({
@@ -215,6 +260,9 @@ function CrmDashboard() {
       }),
     onSuccess: async () => {
       setSendConfirmationOpen(false);
+      setComposerOpen(false);
+      setReplyBody("");
+      setReplyDraftId(null);
       setNotice("Reply sent through Gmail.");
       await invalidateInbox();
     },
@@ -249,11 +297,11 @@ function CrmDashboard() {
     },
   });
 
-  const [scheduleText, setScheduleText] = useState("");
   const [parsedSchedule, setParsedSchedule] = useState<ParsedSchedule | null>(null);
   const [availability, setAvailability] = useState<AvailabilityResult | null>(null);
   const [suggestedSlots, setSuggestedSlots] = useState<SuggestedSlot[]>([]);
   const [selectedSlot, setSelectedSlot] = useState<SuggestedSlot | null>(null);
+  const [scheduleMessage, setScheduleMessage] = useState<string | null>(null);
   const [ambiguityConfirmed, setAmbiguityConfirmed] = useState(false);
   const [meetingTitle, setMeetingTitle] = useState("");
   const [meetingDescription, setMeetingDescription] = useState("");
@@ -261,7 +309,6 @@ function CrmDashboard() {
   const [attendeeText, setAttendeeText] = useState("");
   const [addMeetLink, setAddMeetLink] = useState(false);
   const [sourceThreadId, setSourceThreadId] = useState<string | null>(null);
-  const [editingBooking, setEditingBooking] = useState<CalendarBooking | null>(null);
   const [bookingConfirmationOpen, setBookingConfirmationOpen] = useState(false);
 
   const attendeeEmails = useMemo(
@@ -269,29 +316,31 @@ function CrmDashboard() {
       attendeeText
         .split(/[;,]/)
         .map((email) => email.trim())
-        .filter(Boolean),
+        .filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)),
     [attendeeText],
   );
 
   const parseScheduleMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (input: {
+      text: string;
+      participantEmails: string[];
+    }) => {
       const parsed = await api.post<{
         detected: boolean;
         parsed: ParsedSchedule | null;
         message?: string;
-      }>("/api/calendar-crm/parse-schedule", { text: scheduleText });
+      }>("/api/calendar-crm/parse-schedule", { text: input.text.slice(0, 50_000) });
       if (!parsed.parsed) return { parsed, availability: null, slots: [] };
-      const participants = attendeeEmails;
       const [checked, slots] = await Promise.all([
         api.post<AvailabilityResult>("/api/calendar-crm/check-availability", {
           start: parsed.parsed.start,
           end: parsed.parsed.end,
-          participantEmails: participants,
+          participantEmails: input.participantEmails,
         }),
         api.post<{ slots: SuggestedSlot[] }>("/api/calendar-crm/suggest-slots", {
           start: parsed.parsed.start,
           durationMinutes: parsed.parsed.durationMinutes,
-          participantEmails: participants,
+          participantEmails: input.participantEmails,
         }),
       ]);
       return { parsed, availability: checked, slots: slots.slots };
@@ -299,6 +348,7 @@ function CrmDashboard() {
     onSuccess: ({ parsed, availability: checked, slots }) => {
       setParsedSchedule(parsed.parsed);
       setAvailability(checked);
+      setScheduleMessage(parsed.message ?? null);
       setAmbiguityConfirmed(false);
       const requested =
         parsed.parsed && checked?.available
@@ -316,9 +366,33 @@ function CrmDashboard() {
       );
       setSuggestedSlots(unique);
       setSelectedSlot(unique[0] ?? null);
-      if (!parsed.parsed) setNotice(parsed.message ?? "No specific date and time found.");
     },
   });
+
+  const schedulingContext = useMemo(() => {
+    const messages = [...(threadDetailQuery.data?.thread.messages ?? [])]
+      .reverse()
+      .slice(0, 6)
+      .map((message) => message.bodyText || message.snippet)
+      .join("\n\n") || selectedThread?.snippet || "";
+    return `Draft reply:\n${replyBody}\n\nMost recent conversation first:\n${messages}`.slice(0, 50_000);
+  }, [replyBody, selectedThread?.snippet, threadDetailQuery.data]);
+
+  useEffect(() => {
+    if (!composerOpen) return;
+    if (!hasSchedulingIntent(schedulingContext)) {
+      resetScheduleResults();
+      setScheduleMessage(null);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      parseScheduleMutation.mutate({
+        text: schedulingContext,
+        participantEmails: attendeeEmails,
+      });
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [attendeeEmails, composerOpen, schedulingContext]);
 
   const bookingMutation = useMutation({
     mutationFn: async () => {
@@ -332,9 +406,6 @@ function CrmDashboard() {
         location: meetingLocation.trim() || undefined,
         confirmed: true as const,
       };
-      if (editingBooking) {
-        return api.patch(`/api/calendar-crm/events/${editingBooking.id}`, common);
-      }
       return api.post("/api/calendar-crm/events", {
         ...common,
         addMeetLink,
@@ -343,57 +414,26 @@ function CrmDashboard() {
     },
     onSuccess: async () => {
       setBookingConfirmationOpen(false);
-      setNotice(editingBooking ? "Calendar event updated." : "Calendar event created and invitations sent.");
-      setEditingBooking(null);
+      setNotice("Meeting created and added to Ember Calendar.");
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["crm", "calendar"] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.events.all }),
         invalidateInbox(),
       ]);
-      setView("meetings");
-    },
-  });
-  const [cancelBooking, setCancelBooking] = useState<CalendarBooking | null>(null);
-  const cancelBookingMutation = useMutation({
-    mutationFn: () =>
-      api.delete(`/api/calendar-crm/events/${cancelBooking!.id}`, {
-        confirmed: true,
-      }),
-    onSuccess: async () => {
-      setCancelBooking(null);
-      setNotice("Calendar event cancelled and attendees notified.");
-      await queryClient.invalidateQueries({ queryKey: ["crm", "calendar"] });
     },
   });
 
-  const openScheduleForThread = (thread: EmailThread) => {
-    setView("schedule");
-    setScheduleText(`${thread.subject ?? "Meeting request"}. ${thread.snippet ?? ""}`);
+  const openComposerForThread = (thread: EmailThread) => {
+    setComposerOpen(true);
     setMeetingTitle(thread.subject ?? "Meeting");
     setMeetingDescription(
       `Scheduled from Gmail thread: ${thread.subject ?? "Untitled conversation"}\n\nEmail context: ${thread.snippet ?? ""}`,
     );
+    setMeetingLocation("");
     setAttendeeText(thread.fromEmail ?? "");
+    setAddMeetLink(false);
     setSourceThreadId(thread.id);
-    setEditingBooking(null);
     resetScheduleResults();
-  };
-  const openScheduleForRequest = (item: MeetingRequestListItem) => {
-    if (item.thread) openScheduleForThread(item.thread);
-    else {
-      setView("schedule");
-      setScheduleText(item.request.rawText ?? "");
-      resetScheduleResults();
-    }
-  };
-  const openReschedule = (booking: CalendarBooking) => {
-    setEditingBooking(booking);
-    setView("schedule");
-    setMeetingTitle(booking.title);
-    setMeetingDescription(booking.description ?? "");
-    setMeetingLocation(booking.location ?? "");
-    setAttendeeText(booking.attendees?.map((item) => item.email).join(", ") ?? "");
-    setScheduleText(`Reschedule ${booking.title} near ${formatDateTime(booking.startAt, session.user.timezone)}`);
-    resetScheduleResults();
+    setScheduleMessage(null);
   };
   const resetScheduleResults = () => {
     setParsedSchedule(null);
@@ -427,68 +467,82 @@ function CrmDashboard() {
   });
 
   const topError = firstError(
-    threadsQuery.error,
-    statsQuery.error,
-    calendarQuery.error,
-    meetingRequestsQuery.error,
-    syncMutation.error,
+    actionRequiredError(threadsQuery.error),
+    actionRequiredError(statsQuery.error),
+    actionRequiredError(gmailSyncQuery.error),
+    actionRequiredError(threadDetailQuery.error),
     updateThreadMutation.error,
-    generateReplyMutation.error,
+    actionRequiredError(generateReplyMutation.error),
+    actionRequiredError(saveDraftMutation.error),
+    actionRequiredError(discardDraftMutation.error),
     sendReplyMutation.error,
-    parseScheduleMutation.error,
+    actionRequiredError(parseScheduleMutation.error),
     bookingMutation.error,
-    cancelBookingMutation.error,
     accountMutation.error,
+  );
+  const composerError = firstError(
+    generateReplyMutation.error,
+    saveDraftMutation.error,
+    discardDraftMutation.error,
+    parseScheduleMutation.error,
   );
   const reauthRequired =
     topError instanceof ApiClientError &&
     ["GOOGLE_REAUTH_REQUIRED", "GOOGLE_PERMISSION_REQUIRED"].includes(topError.code);
+  const sessionExpired =
+    topError instanceof ApiClientError && topError.code === "UNAUTHORIZED";
+  const canReviewBooking = Boolean(
+    selectedSlot && (!parsedSchedule?.isAmbiguous || ambiguityConfirmed),
+  );
+  const insertSlotIntoReply = (slot: SuggestedSlot) => {
+    const sentence = `Would ${formatDateRange(slot.start, slot.end, session.user.timezone)} (${session.user.timezone}) work for you?`;
+    setReplyBody((current) =>
+      current.trim() ? `${current.trim()}\n\n${sentence}` : sentence,
+    );
+    setSelectedSlot(slot);
+  };
 
   return (
-    <div className="min-h-screen bg-[#f5f7f6] text-[#17221d]">
-      <header className="sticky top-0 z-30 border-b border-black/[0.06] bg-white/90 backdrop-blur-xl">
-        <div className="mx-auto flex h-16 max-w-[1500px] items-center justify-between px-4 sm:px-6">
-          <div className="flex items-center gap-3">
-            <span className="grid h-9 w-9 place-items-center rounded-xl bg-[#183d2c] text-sm font-bold text-white">S</span>
-            <div>
-              <p className="text-sm font-semibold leading-none">SCCCI CRM</p>
-              <p className="mt-1 text-[11px] text-black/40">Gmail + Calendar workspace</p>
+    <div className="min-h-screen bg-background text-foreground">
+      <header className="sticky top-0 z-30 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <div className="flex min-h-14 items-center justify-between gap-4 px-5 sm:px-8">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <Mail className="h-4 w-4 shrink-0" />
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold tracking-tight">CRM</p>
+              <p className="truncate text-[11px] text-muted-foreground">Gmail and Calendar</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="hidden items-center gap-2 rounded-full bg-[#e8f5ec] px-3 py-1.5 text-xs font-medium text-[#24633d] sm:flex">
-              <span className="h-1.5 w-1.5 rounded-full bg-[#3a9b62]" />
-              {session.google.email} connected
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="hidden min-w-0 items-center gap-2 text-xs text-muted-foreground sm:flex">
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+              <span className="truncate">{session.google.email}</span>
             </span>
             {session.user.avatarUrl ? (
-              <img src={session.user.avatarUrl} alt="" className="h-9 w-9 rounded-full border border-black/10" referrerPolicy="no-referrer" />
+              <img src={session.user.avatarUrl} alt="" className="h-7 w-7 rounded-full border border-border" referrerPolicy="no-referrer" />
             ) : (
-              <span className="grid h-9 w-9 place-items-center rounded-full bg-[#e7ece9] text-xs font-semibold">{session.user.name.slice(0, 1).toUpperCase()}</span>
+              <span className="grid h-7 w-7 place-items-center rounded-full bg-foreground text-[10px] font-semibold text-background">{session.user.name.slice(0, 1).toUpperCase()}</span>
             )}
+            <button
+              type="button"
+              onClick={() => setAccountAction("logout")}
+              className="grid h-8 w-8 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              aria-label="Log out"
+              title="Log out"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
           </div>
         </div>
+        <nav className="flex min-w-0 items-center gap-5 overflow-x-auto px-5 sm:px-8" aria-label="CRM sections">
+          <NavButton active={view === "inbox"} icon={Inbox} label="Inbox" count={statsQuery.data?.stats.requiresResponse} onClick={() => setView("inbox")} />
+          <NavButton active={view === "privacy"} icon={ShieldCheck} label="Settings" onClick={() => setView("privacy")} />
+        </nav>
       </header>
 
-      <div className="mx-auto grid max-w-[1500px] gap-5 px-4 py-5 sm:px-6 lg:grid-cols-[220px_minmax(0,1fr)]">
-        <aside className="rounded-2xl border border-black/[0.06] bg-white p-3 lg:sticky lg:top-[84px] lg:h-[calc(100vh-104px)]">
-          <nav className="grid grid-cols-4 gap-1 lg:grid-cols-1">
-            <NavButton active={view === "inbox"} icon={Inbox} label="Inbox" count={statsQuery.data?.stats.requiresResponse} onClick={() => setView("inbox")} />
-            <NavButton active={view === "schedule"} icon={Sparkles} label="Schedule" onClick={() => setView("schedule")} />
-            <NavButton active={view === "meetings"} icon={CalendarDays} label="Meetings" count={calendarQuery.data?.bookings.filter((item) => item.status === "confirmed").length} onClick={() => setView("meetings")} />
-            <NavButton active={view === "privacy"} icon={ShieldCheck} label="Privacy" onClick={() => setView("privacy")} />
-          </nav>
-          <div className="mt-4 hidden rounded-xl bg-[#f3f6f4] p-4 lg:block">
-            <p className="text-xs font-semibold">Safety controls</p>
-            <p className="mt-2 text-xs leading-5 text-black/45">Replies and calendar changes always stop for your confirmation.</p>
-          </div>
-          <button type="button" onClick={() => setAccountAction("logout")} className="mt-3 hidden w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm text-black/50 hover:bg-black/[0.04] lg:flex">
-            <LogOut className="h-4 w-4" /> Log out
-          </button>
-        </aside>
-
-        <main className="min-w-0">
+      <main className="min-w-0 px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+5.5rem)] sm:px-4 sm:py-4 sm:pb-4">
           {notice && (
-            <div className="mb-4 flex items-center justify-between rounded-xl border border-[#bfe3ca] bg-[#edf8f0] px-4 py-3 text-sm text-[#215a38]">
+            <div className="mb-4 flex items-center justify-between rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
               <span className="flex items-center gap-2"><Check className="h-4 w-4" />{notice}</span>
               <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss">×</button>
             </div>
@@ -497,6 +551,7 @@ function CrmDashboard() {
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
               <span className="flex items-center gap-2"><AlertTriangle className="h-4 w-4" />{errorMessage(topError)}</span>
               {reauthRequired && <a href={googleSignInUrl()} className="font-semibold underline">Reconnect Google</a>}
+              {sessionExpired && <a href="/login" className="font-semibold underline">Sign in again</a>}
             </div>
           )}
 
@@ -519,8 +574,8 @@ function CrmDashboard() {
               onSelectThread={setSelectedThreadId}
               selectedIds={selectedThreadIds}
               onToggleSelected={(id) => setSelectedThreadIds((current) => toggleSet(current, id))}
-              onSync={() => syncMutation.mutate()}
-              syncing={syncMutation.isPending}
+              onSync={() => void refreshGmail()}
+              syncing={gmailSyncQuery.isFetching}
               onBulkClassify={() => bulkClassifyMutation.mutate()}
               onBulkArchive={() => bulkUpdateMutation.mutate({ status: "archived" })}
               onBulkDraft={() => bulkDraftMutation.mutate()}
@@ -529,54 +584,7 @@ function CrmDashboard() {
               detailLoading={threadDetailQuery.isLoading}
               selectedThread={selectedThread}
               onUpdate={(updates) => selectedThreadId && updateThreadMutation.mutate({ threadId: selectedThreadId, updates })}
-              onSchedule={() => selectedThread && openScheduleForThread(selectedThread)}
-              replyBody={replyBody}
-              onReplyBody={setReplyBody}
-              onGenerate={(regenerate) => generateReplyMutation.mutate(regenerate)}
-              generating={generateReplyMutation.isPending}
-              onReviewSend={() => setSendConfirmationOpen(true)}
-            />
-          )}
-
-          {view === "schedule" && (
-            <ScheduleView
-              user={session.user}
-              scheduleText={scheduleText}
-              onScheduleText={(value) => { setScheduleText(value); resetScheduleResults(); }}
-              title={meetingTitle}
-              onTitle={setMeetingTitle}
-              description={meetingDescription}
-              onDescription={setMeetingDescription}
-              location={meetingLocation}
-              onLocation={setMeetingLocation}
-              attendees={attendeeText}
-              onAttendees={(value) => { setAttendeeText(value); resetScheduleResults(); }}
-              addMeetLink={addMeetLink}
-              onAddMeetLink={setAddMeetLink}
-              parsed={parsedSchedule}
-              availability={availability}
-              slots={suggestedSlots}
-              selectedSlot={selectedSlot}
-              onSelectSlot={setSelectedSlot}
-              ambiguityConfirmed={ambiguityConfirmed}
-              onAmbiguityConfirmed={setAmbiguityConfirmed}
-              onAnalyse={() => parseScheduleMutation.mutate()}
-              analysing={parseScheduleMutation.isPending}
-              onReviewBooking={() => setBookingConfirmationOpen(true)}
-              editingBooking={editingBooking}
-              onCancelEdit={() => setEditingBooking(null)}
-            />
-          )}
-
-          {view === "meetings" && (
-            <MeetingsView
-              calendar={calendarQuery.data}
-              meetingRequests={meetingRequestsQuery.data?.meetingRequests ?? []}
-              timezone={session.user.timezone}
-              loading={calendarQuery.isLoading}
-              onScheduleRequest={openScheduleForRequest}
-              onReschedule={openReschedule}
-              onCancel={setCancelBooking}
+              onCreateDraft={() => selectedThread && openComposerForThread(selectedThread)}
             />
           )}
 
@@ -588,8 +596,146 @@ function CrmDashboard() {
               onAccountAction={setAccountAction}
             />
           )}
-        </main>
-      </div>
+      </main>
+
+      <Dialog open={composerOpen} onOpenChange={setComposerOpen}>
+        <DialogContent className="bottom-0 left-0 top-auto flex h-[min(94dvh,920px)] w-full max-w-none translate-x-0 translate-y-0 flex-col overflow-hidden rounded-b-none rounded-t-2xl p-0 sm:bottom-auto sm:left-1/2 sm:top-1/2 sm:h-[min(90dvh,900px)] sm:max-w-4xl sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl">
+          <DialogHeader className="shrink-0 border-b border-border px-4 py-4 pr-12 sm:px-6">
+            <DialogTitle>Create draft</DialogTitle>
+            <DialogDescription className="truncate">
+              To: {selectedThread?.fromEmail ?? threadDetailQuery.data?.thread.fromEmail ?? "Thread participant"} · {threadDetailQuery.data?.thread.subject || selectedThread?.subject || "No subject"}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6 sm:py-5">
+            {Boolean(composerError) && (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900" role="alert">
+                <span>{errorMessage(composerError)}</span>
+                {composerError instanceof ApiClientError && ["GOOGLE_REAUTH_REQUIRED", "GOOGLE_PERMISSION_REQUIRED"].includes(composerError.code) && <a href={googleSignInUrl()} className="font-semibold underline">Reconnect Google</a>}
+                {composerError instanceof ApiClientError && composerError.code === "UNAUTHORIZED" && <a href="/login" className="font-semibold underline">Sign in again</a>}
+              </div>
+            )}
+
+            <section className="rounded-lg border border-border bg-card">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+                <div>
+                  <h3 className="text-sm font-semibold">Message</h3>
+                  <p className="mt-0.5 text-xs text-muted-foreground">AI suggestions remain editable and are never sent automatically.</p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => generateReplyMutation.mutate(Boolean(replyBody.trim()))}
+                  disabled={generateReplyMutation.isPending}
+                >
+                  {generateReplyMutation.isPending ? <Loader2 className="animate-spin" /> : <Sparkles />}
+                  Suggest Message Reply
+                </Button>
+              </div>
+              <Textarea
+                value={replyBody}
+                onChange={(event) => setReplyBody(event.target.value)}
+                placeholder="Write a reply or request an AI suggestion…"
+                className="min-h-56 resize-y rounded-none border-0 px-4 py-4 text-sm leading-6 shadow-none focus-visible:ring-0 sm:min-h-64"
+              />
+              <p className="border-t border-border px-4 py-2 text-[11px] leading-4 text-muted-foreground">
+                Suggestions use recent thread context with email addresses, phone numbers, tokens, and links masked where possible.
+              </p>
+            </section>
+
+            <section className="rounded-lg border border-border bg-card">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+                <div>
+                  <h3 className="flex items-center gap-2 text-sm font-semibold"><CalendarDays className="h-4 w-4" /> Scheduling</h3>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{session.user.timezone} · working hours {session.user.workingHoursStart}–{session.user.workingHoursEnd}</p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => parseScheduleMutation.mutate({ text: schedulingContext, participantEmails: attendeeEmails })}
+                  disabled={!schedulingContext.trim() || parseScheduleMutation.isPending}
+                >
+                  {parseScheduleMutation.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                  Check availability
+                </Button>
+              </div>
+
+              <div className="space-y-4 p-4">
+                {parseScheduleMutation.isPending && !parsedSchedule && (
+                  <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Detecting meeting details and checking Calendar…</p>
+                )}
+                {!parseScheduleMutation.isPending && !parsedSchedule && (
+                  <p className="text-sm text-muted-foreground">
+                    {scheduleMessage ?? "No specific meeting time detected yet. Add a date or time to your reply and availability will be checked automatically."}
+                  </p>
+                )}
+
+                {parsedSchedule && (
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3 rounded-md bg-muted/50 p-3">
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Interpreted as</p>
+                        <p className="mt-1 text-sm font-semibold">{parsedSchedule.interpretation}</p>
+                      </div>
+                      <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${availability?.available ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-900"}`}>
+                        {availability?.available ? "Available" : "Conflict found"}
+                      </span>
+                    </div>
+                    {availability && !availability.available && (
+                      <p className="text-xs text-amber-800">{availability.reason} Nearby available times are shown below.</p>
+                    )}
+                    {parsedSchedule.isAmbiguous && (
+                      <label className="flex items-start gap-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
+                        <input className="mt-1" type="checkbox" checked={ambiguityConfirmed} onChange={(event) => setAmbiguityConfirmed(event.target.checked)} />
+                        <span><strong>Confirm {parsedSchedule.interpretation}.</strong><br /><span className="text-xs text-amber-800">{parsedSchedule.ambiguityReason}</span></span>
+                      </label>
+                    )}
+                  </div>
+                )}
+
+                {suggestedSlots.length > 0 && (
+                  <div>
+                    <p className="mb-2 text-xs font-semibold">Recommended times</p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {suggestedSlots.map((slot) => (
+                        <div key={slot.start} className={`rounded-md border p-3 ${selectedSlot?.start === slot.start ? "border-foreground bg-muted/60 ring-1 ring-foreground" : "border-border"}`}>
+                          <button type="button" className="w-full text-left" onClick={() => setSelectedSlot(slot)}>
+                            <span className="block text-sm font-semibold">{formatDateTime(slot.start, session.user.timezone)}</span>
+                            <span className="mt-0.5 block text-xs text-muted-foreground">{formatTime(slot.start, session.user.timezone)}–{formatTime(slot.end, session.user.timezone)} · {session.user.timezone}</span>
+                          </button>
+                          <Button size="sm" variant="ghost" className="mt-2 h-7 px-2 text-xs" onClick={() => insertSlotIntoReply(slot)}>Insert into reply</Button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {(parsedSchedule || suggestedSlots.length > 0) && (
+                  <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-2">
+                    <Field label="Meeting title"><Input value={meetingTitle} onChange={(event) => setMeetingTitle(event.target.value)} placeholder="Client catch-up" /></Field>
+                    <Field label="Participants"><Input value={attendeeText} onChange={(event) => setAttendeeText(event.target.value)} placeholder="alex@example.com" /></Field>
+                    <Field label="Location"><Input value={meetingLocation} onChange={(event) => setMeetingLocation(event.target.value)} placeholder="Office or address" /></Field>
+                    <label className="flex h-10 items-center gap-2 self-end rounded-md border border-border px-3 text-sm"><input type="checkbox" checked={addMeetLink} onChange={(event) => setAddMeetLink(event.target.checked)} /><Video className="h-4 w-4" /> Add Google Meet</label>
+                    <div className="sm:col-span-2"><Field label="Calendar description and email context"><Textarea value={meetingDescription} onChange={(event) => setMeetingDescription(event.target.value)} className="min-h-24" /></Field></div>
+                    <div className="flex flex-wrap items-center justify-between gap-2 sm:col-span-2">
+                      <p className="text-[11px] text-muted-foreground">A confirmation step appears before Calendar is changed.</p>
+                      <Button onClick={() => setBookingConfirmationOpen(true)} disabled={!canReviewBooking}><CalendarDays /> Create Calendar event</Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </section>
+          </div>
+
+          <DialogFooter className="shrink-0 flex-wrap border-t border-border bg-background px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-3 sm:px-6 sm:pb-4">
+            <Button variant="ghost" onClick={() => discardDraftMutation.mutate()} disabled={discardDraftMutation.isPending} className="mr-auto text-muted-foreground"><Trash2 /> Discard</Button>
+            <Button variant="outline" onClick={() => saveDraftMutation.mutate()} disabled={!replyBody.trim() || saveDraftMutation.isPending}>
+              {saveDraftMutation.isPending ? <Loader2 className="animate-spin" /> : <Save />} Save draft
+            </Button>
+            <Button onClick={() => setSendConfirmationOpen(true)} disabled={!replyBody.trim()}><Send /> Review and send</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={sendConfirmationOpen} onOpenChange={setSendConfirmationOpen}>
         <DialogContent className="max-w-xl p-6">
@@ -597,10 +743,13 @@ function CrmDashboard() {
             <DialogTitle>Send this reply?</DialogTitle>
             <DialogDescription>Review the final recipient and message. This is the only step that sends email.</DialogDescription>
           </DialogHeader>
-          <div className="my-5 rounded-xl bg-[#f5f7f6] p-4 text-sm">
-            <p className="font-medium">To: {selectedThread?.fromEmail}</p>
-            <p className="mt-3 max-h-60 whitespace-pre-wrap overflow-auto text-black/60">{replyBody}</p>
+          <div className="my-5 rounded-lg border border-border bg-muted/40 p-4 text-sm">
+            <p className="font-medium">To: {selectedThread?.fromEmail ?? threadDetailQuery.data?.thread.fromEmail ?? "Thread participant"}</p>
+            <p className="mt-3 max-h-60 whitespace-pre-wrap overflow-auto text-muted-foreground">{replyBody}</p>
           </div>
+          {sendReplyMutation.error && (
+            <p className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="alert">{errorMessage(sendReplyMutation.error)}</p>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setSendConfirmationOpen(false)}>Keep editing</Button>
             <Button onClick={() => sendReplyMutation.mutate()} disabled={!replyBody.trim() || sendReplyMutation.isPending}>
@@ -613,30 +762,26 @@ function CrmDashboard() {
       <Dialog open={bookingConfirmationOpen} onOpenChange={setBookingConfirmationOpen}>
         <DialogContent className="max-w-lg p-6">
           <DialogHeader>
-            <DialogTitle>{editingBooking ? "Update this calendar event?" : "Create this calendar event?"}</DialogTitle>
+            <DialogTitle>Create this calendar event?</DialogTitle>
             <DialogDescription>No Calendar change occurs until you confirm below.</DialogDescription>
           </DialogHeader>
           {selectedSlot && (
-            <div className="my-5 space-y-2 rounded-xl bg-[#f5f7f6] p-4 text-sm">
+            <div className="my-5 space-y-2 rounded-lg border border-border bg-muted/40 p-4 text-sm">
               <p className="font-semibold">{meetingTitle || "Meeting"}</p>
               <p>{formatDateRange(selectedSlot.start, selectedSlot.end, session.user.timezone)}</p>
-              {attendeeEmails.length > 0 && <p className="text-black/55">Guests: {attendeeEmails.join(", ")}</p>}
-              {addMeetLink && !editingBooking && <p className="text-black/55">Google Meet link requested</p>}
+              {attendeeEmails.length > 0 && <p className="text-muted-foreground">Guests: {attendeeEmails.join(", ")}</p>}
+              {addMeetLink && <p className="text-muted-foreground">Google Meet link requested</p>}
             </div>
+          )}
+          {bookingMutation.error && (
+            <p className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="alert">{errorMessage(bookingMutation.error)}</p>
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setBookingConfirmationOpen(false)}>Go back</Button>
             <Button onClick={() => bookingMutation.mutate()} disabled={bookingMutation.isPending}>
-              {bookingMutation.isPending ? <Loader2 className="animate-spin" /> : <CalendarDays />} Confirm {editingBooking ? "update" : "booking"}
+              {bookingMutation.isPending ? <Loader2 className="animate-spin" /> : <CalendarDays />} Confirm booking
             </Button>
           </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={Boolean(cancelBooking)} onOpenChange={(open) => !open && setCancelBooking(null)}>
-        <DialogContent className="max-w-md p-6">
-          <DialogHeader><DialogTitle>Cancel {cancelBooking?.title}?</DialogTitle><DialogDescription>The Google Calendar event will be cancelled and guests will receive an update.</DialogDescription></DialogHeader>
-          <DialogFooter className="mt-6"><Button variant="outline" onClick={() => setCancelBooking(null)}>Keep event</Button><Button variant="destructive" onClick={() => cancelBookingMutation.mutate()} disabled={cancelBookingMutation.isPending}>Confirm cancellation</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -681,41 +826,43 @@ function InboxView(props: {
   detailLoading: boolean;
   selectedThread?: EmailThread;
   onUpdate: (updates: Partial<Pick<EmailThread, "category" | "priority" | "status">>) => void;
-  onSchedule: () => void;
-  replyBody: string;
-  onReplyBody: (value: string) => void;
-  onGenerate: (regenerate: boolean) => void;
-  generating: boolean;
-  onReviewSend: () => void;
+  onCreateDraft: () => void;
 }) {
   return (
-    <section>
-      <PageHeading eyebrow="Conversation intelligence" title="Inbox" description="Prioritised Gmail threads with explainable classifications and review-first replies." action={<Button onClick={props.onSync} disabled={props.syncing}>{props.syncing ? <Loader2 className="animate-spin" /> : <RefreshCw />} Sync Gmail</Button>} />
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Metric label="Total threads" value={props.stats?.total} icon={Mail} />
-        <Metric label="Unread" value={props.stats?.unread} icon={Inbox} />
-        <Metric label="Important" value={props.stats?.urgent} icon={AlertTriangle} />
-        <Metric label="Needs response" value={props.stats?.requiresResponse} icon={MessageSquare} />
-      </div>
-      <div className="mt-5 rounded-2xl border border-black/[0.06] bg-white p-3">
+    <section className="min-h-0">
+      <div className="rounded-lg border border-border bg-card shadow-sm">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-3 py-2.5 text-xs text-muted-foreground">
+          <span><strong className="font-semibold text-foreground">{props.stats?.total ?? "—"}</strong> threads</span>
+          <span><strong className="font-semibold text-foreground">{props.stats?.unread ?? "—"}</strong> unread</span>
+          <span><strong className="font-semibold text-foreground">{props.stats?.urgent ?? "—"}</strong> important</span>
+          <span><strong className="font-semibold text-foreground">{props.stats?.requiresResponse ?? "—"}</strong> need a reply</span>
+          <div className="ml-auto flex items-center gap-2">
+            <span className="hidden items-center gap-1.5 sm:flex"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Auto-sync on</span>
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={props.onSync} disabled={props.syncing} aria-label="Refresh Gmail now" title="Refresh Gmail now">
+              {props.syncing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            </Button>
+          </div>
+        </div>
+        <div className="p-3">
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[1fr_160px_140px_150px_auto]">
-          <label className="relative"><Search className="absolute left-3 top-2.5 h-4 w-4 text-black/35" /><Input value={props.sender} onChange={(event) => props.onSender(event.target.value)} placeholder="Filter sender" className="h-9 pl-9" /></label>
+          <label className="relative"><Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={props.sender} onChange={(event) => props.onSender(event.target.value)} placeholder="Filter sender" className="h-9 pl-9" /></label>
           <FilterSelect label="All categories" value={props.category} values={CATEGORIES} onChange={props.onCategory} />
           <FilterSelect label="All priorities" value={props.priority} values={PRIORITIES} onChange={props.onPriority} />
           <FilterSelect label="All statuses" value={props.status} values={STATUSES} onChange={props.onStatus} />
-          <label className="flex h-9 items-center gap-2 rounded-lg border border-black/10 px-3 text-xs"><input type="checkbox" checked={props.responseOnly} onChange={(event) => props.onResponseOnly(event.target.checked)} /> Needs response</label>
+          <label className="flex h-9 items-center gap-2 rounded-md border border-input bg-background px-3 text-xs"><input type="checkbox" checked={props.responseOnly} onChange={(event) => props.onResponseOnly(event.target.checked)} /> Needs response</label>
         </div>
-        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-black/[0.06] pt-3">
-          <span className="mr-1 text-xs text-black/40">{props.selectedIds.size} selected</span>
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
+          <span className="mr-1 text-xs text-muted-foreground">{props.selectedIds.size} selected</span>
           <Button size="sm" variant="outline" onClick={props.onBulkClassify} disabled={props.bulkPending}>Reclassify all</Button>
           <Button size="sm" variant="outline" onClick={props.onBulkDraft} disabled={props.selectedIds.size === 0 || props.bulkPending}><Sparkles /> Generate drafts</Button>
           <Button size="sm" variant="outline" onClick={props.onBulkArchive} disabled={props.selectedIds.size === 0 || props.bulkPending}><Archive /> Archive</Button>
-          <span className="text-xs text-black/35">Bulk drafts are never sent automatically.</span>
+          <span className="text-xs text-muted-foreground">Bulk drafts are never sent automatically.</span>
+        </div>
         </div>
       </div>
-      <div className="mt-5 grid min-h-[620px] overflow-hidden rounded-2xl border border-black/[0.06] bg-white xl:grid-cols-[390px_minmax(0,1fr)]">
-        <div className="border-b border-black/[0.06] xl:border-b-0 xl:border-r">
-          {props.loading ? <LoadingBlock label="Loading Gmail threads…" /> : props.threads.length === 0 ? <EmptyBlock title="No threads match" description="Sync Gmail or clear a filter to see conversations." /> : props.threads.map((thread) => <ThreadRow key={thread.gmailThreadId} thread={thread} active={props.selectedThreadId === thread.gmailThreadId} checked={props.selectedIds.has(thread.gmailThreadId)} onCheck={() => props.onToggleSelected(thread.gmailThreadId)} onOpen={() => props.onSelectThread(thread.gmailThreadId)} />)}
+      <div className="mt-3 grid min-h-0 overflow-hidden rounded-lg border border-border bg-card shadow-sm xl:h-[calc(100dvh-214px)] xl:min-h-[560px] xl:grid-cols-[420px_minmax(0,1fr)]">
+        <div className="min-h-64 max-h-[48dvh] overflow-y-auto overscroll-contain border-b border-border xl:max-h-none xl:min-h-0 xl:border-b-0 xl:border-r">
+          {props.loading ? <LoadingBlock label="Loading Gmail threads…" /> : props.threads.length === 0 ? <EmptyBlock title="No threads match" description="Gmail will retry automatically. Clear a filter to see more conversations." /> : props.threads.map((thread) => <ThreadRow key={thread.gmailThreadId} thread={thread} active={props.selectedThreadId === thread.gmailThreadId} checked={props.selectedIds.has(thread.gmailThreadId)} onCheck={() => props.onToggleSelected(thread.gmailThreadId)} onOpen={() => props.onSelectThread(thread.gmailThreadId)} />)}
         </div>
         <ThreadDetailPanel {...props} />
       </div>
@@ -729,61 +876,24 @@ function ThreadDetailPanel(props: Parameters<typeof InboxView>[0]) {
   if (!props.detail) return <EmptyBlock title="Conversation unavailable" description="Try syncing Gmail and opening it again." />;
   const classification = props.detail.classification;
   return (
-    <div className="min-w-0 p-5 sm:p-7">
+    <div className="min-h-0 min-w-0 overflow-y-auto overscroll-contain p-4 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] sm:p-6 xl:p-7">
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div><p className="text-xs font-medium text-black/40">{props.selectedThread?.fromName || props.selectedThread?.fromEmail}</p><h2 className="mt-1 text-xl font-semibold tracking-[-0.025em]">{props.detail.thread.subject || "(No subject)"}</h2></div>
-        <Button variant="outline" onClick={props.onSchedule}><CalendarDays /> Schedule</Button>
+        <div><p className="text-xs font-medium text-muted-foreground">{props.selectedThread?.fromName || props.selectedThread?.fromEmail}</p><h2 className="mt-1 text-xl font-semibold tracking-tight">{props.detail.thread.subject || "(No subject)"}</h2></div>
+        <Button onClick={props.onCreateDraft}><Sparkles /> Create Draft</Button>
       </div>
-      {classification && <div className="mt-5 grid gap-3 rounded-xl bg-[#f5f7f6] p-4 sm:grid-cols-[1fr_1fr_2fr]">
+      {classification && <div className="mt-5 grid gap-3 rounded-lg border border-border bg-muted/40 p-4 sm:grid-cols-[1fr_1fr_2fr]">
         <EditableLabel label="Category"><FilterSelect label="Category" value={classification.category} values={CATEGORIES} onChange={(value) => props.onUpdate({ category: value as EmailCategory })} /></EditableLabel>
         <EditableLabel label="Priority"><FilterSelect label="Priority" value={classification.priority} values={PRIORITIES} onChange={(value) => props.onUpdate({ priority: value as EmailPriority })} /></EditableLabel>
-        <div><p className="text-[10px] font-semibold uppercase tracking-wider text-black/35">Why it matters</p><ul className="mt-2 space-y-1 text-xs text-black/55">{classification.importanceReasons.length ? classification.importanceReasons.map((reason) => <li key={reason} className="flex gap-2"><Info className="mt-0.5 h-3 w-3 shrink-0" />{reason}</li>) : <li>No elevated importance signals found.</li>}</ul></div>
+        <div><p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Why it matters</p><ul className="mt-2 space-y-1 text-xs text-muted-foreground">{classification.importanceReasons.length ? classification.importanceReasons.map((reason) => <li key={reason} className="flex gap-2"><Info className="mt-0.5 h-3 w-3 shrink-0" />{reason}</li>) : <li>No elevated importance signals found.</li>}</ul></div>
       </div>}
-      <div className="mt-6 max-h-[380px] space-y-3 overflow-y-auto pr-1">{props.detail.thread.messages.map((message) => <article key={message.id} className="rounded-xl border border-black/[0.06] p-4"><div className="flex flex-wrap justify-between gap-2 text-xs"><span className="font-semibold">{message.fromName || message.fromEmail}</span><time className="text-black/35">{formatDate(message.internalDate)}</time></div><p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-black/65">{message.bodyText || message.snippet}</p></article>)}</div>
-      <div className="mt-7 border-t border-black/[0.07] pt-6">
-        <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-sm font-semibold">Suggested reply</h3><p className="mt-1 text-xs text-black/40">Generated locally from thread context and editable before confirmation.</p></div><Button size="sm" variant="outline" onClick={() => props.onGenerate(Boolean(props.replyBody))} disabled={props.generating}>{props.generating ? <Loader2 className="animate-spin" /> : <Sparkles />}{props.replyBody ? "Regenerate" : "Generate draft"}</Button></div>
-        <Textarea value={props.replyBody} onChange={(event) => props.onReplyBody(event.target.value)} placeholder="Generate a draft or write your reply…" className="mt-4 min-h-44 leading-6" />
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-3"><FilterSelect label="Update status" value={classification?.status ?? ""} values={STATUSES} onChange={(value) => props.onUpdate({ status: value as EmailStatus })} /><Button onClick={props.onReviewSend} disabled={!props.replyBody.trim()}><Send /> Review and send</Button></div>
+      {props.detail.stale && <div className="mt-4 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">Showing the latest cached preview while Gmail reconnects. This thread will retry automatically.</div>}
+      <div className="mt-6 space-y-2">{props.detail.thread.messages.map((message) => <article key={message.id} className="overflow-hidden rounded-lg border border-border bg-background"><div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/30 px-4 py-3 text-xs"><span className="font-semibold">{message.fromName || message.fromEmail}</span><time className="text-muted-foreground">{formatDate(message.internalDate)}</time></div><p className="whitespace-pre-wrap break-words px-4 py-4 text-sm leading-6 text-foreground/80">{cleanEmailBody(message.bodyText || message.snippet)}</p></article>)}</div>
+      <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+        <FilterSelect label="Update status" value={classification?.status ?? ""} values={STATUSES} onChange={(value) => props.onUpdate({ status: value as EmailStatus })} />
+        <Button onClick={props.onCreateDraft}><Sparkles /> Create Draft</Button>
       </div>
     </div>
   );
-}
-
-function ScheduleView(props: {
-  user: SessionData["user"];
-  scheduleText: string; onScheduleText: (value: string) => void;
-  title: string; onTitle: (value: string) => void;
-  description: string; onDescription: (value: string) => void;
-  location: string; onLocation: (value: string) => void;
-  attendees: string; onAttendees: (value: string) => void;
-  addMeetLink: boolean; onAddMeetLink: (value: boolean) => void;
-  parsed: ParsedSchedule | null; availability: AvailabilityResult | null;
-  slots: SuggestedSlot[]; selectedSlot: SuggestedSlot | null; onSelectSlot: (slot: SuggestedSlot) => void;
-  ambiguityConfirmed: boolean; onAmbiguityConfirmed: (value: boolean) => void;
-  onAnalyse: () => void; analysing: boolean; onReviewBooking: () => void;
-  editingBooking: CalendarBooking | null; onCancelEdit: () => void;
-}) {
-  const canBook = props.selectedSlot && (!props.parsed?.isAmbiguous || props.ambiguityConfirmed);
-  return <section>
-    <PageHeading eyebrow="Natural-language scheduling" title={props.editingBooking ? `Reschedule ${props.editingBooking.title}` : "Find a meeting time"} description={`Times are interpreted in ${props.user.timezone}; working hours are ${props.user.workingHoursStart}–${props.user.workingHoursEnd}.`} action={props.editingBooking ? <Button variant="outline" onClick={props.onCancelEdit}>Cancel reschedule</Button> : undefined} />
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(340px,0.85fr)]">
-      <div className="space-y-5">
-        <div className="rounded-2xl border border-black/[0.06] bg-white p-5 sm:p-6"><label className="text-sm font-semibold">What did they say?</label><Textarea value={props.scheduleText} onChange={(event) => props.onScheduleText(event.target.value)} placeholder='Example: “I am free at 8:00 PM on Monday for a 45 minute call.”' className="mt-3 min-h-32 text-base leading-7" /><Button className="mt-4" onClick={props.onAnalyse} disabled={!props.scheduleText.trim() || props.analysing}>{props.analysing ? <Loader2 className="animate-spin" /> : <Sparkles />} Detect and check Calendar</Button></div>
-        {props.parsed && <div className="rounded-2xl border border-black/[0.06] bg-white p-5 sm:p-6"><p className="text-xs font-semibold uppercase tracking-wider text-black/35">Interpreted as</p><p className="mt-2 text-xl font-semibold">{props.parsed.interpretation}</p><div className={`mt-4 rounded-xl p-4 text-sm ${props.availability?.available ? "bg-[#eaf7ee] text-[#245d39]" : "bg-amber-50 text-amber-800"}`}><p className="font-semibold">{props.availability?.available ? "Requested time is available" : props.availability?.reason}</p>{!props.availability?.withinWorkingHours && <p className="mt-1 text-xs">This falls outside your working hours, so nearby in-hours times are suggested.</p>}</div>{props.parsed.isAmbiguous && <label className="mt-4 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm"><input className="mt-1" type="checkbox" checked={props.ambiguityConfirmed} onChange={(event) => props.onAmbiguityConfirmed(event.target.checked)} /><span><strong>Confirm this interpretation.</strong><br /><span className="text-amber-800/75">{props.parsed.ambiguityReason} The CRM will use {props.parsed.interpretation}.</span></span></label>}</div>}
-        {props.slots.length > 0 && <div className="rounded-2xl border border-black/[0.06] bg-white p-5 sm:p-6"><h2 className="text-sm font-semibold">Recommended slots</h2><div className="mt-4 grid gap-2 sm:grid-cols-2">{props.slots.map((slot) => <button type="button" key={slot.start} onClick={() => props.onSelectSlot(slot)} className={`rounded-xl border p-4 text-left text-sm transition ${props.selectedSlot?.start === slot.start ? "border-[#2c7650] bg-[#edf8f0] ring-1 ring-[#2c7650]" : "border-black/[0.08] hover:bg-black/[0.02]"}`}><span className="font-semibold">{formatDateTime(slot.start, props.user.timezone)}</span><span className="mt-1 block text-xs text-black/40">{formatTime(slot.start, props.user.timezone)}–{formatTime(slot.end, props.user.timezone)}</span></button>)}</div>{props.availability?.participantAvailability.filter((item) => item.calendarId !== "primary").map((item) => <p key={item.calendarId} className="mt-3 text-xs text-black/45">{item.calendarId}: {item.available === null ? `availability unavailable (${item.error})` : item.available ? "available" : "busy"}</p>)}</div>}
-      </div>
-      <div className="rounded-2xl border border-black/[0.06] bg-white p-5 sm:p-6 xl:sticky xl:top-[84px] xl:h-fit"><h2 className="text-sm font-semibold">Event details</h2><div className="mt-5 space-y-4"><Field label="Title"><Input value={props.title} onChange={(event) => props.onTitle(event.target.value)} placeholder="Client catch-up" /></Field><Field label="Participants"><Input value={props.attendees} onChange={(event) => props.onAttendees(event.target.value)} placeholder="alex@example.com, sam@example.com" /></Field><Field label="Location"><Input value={props.location} onChange={(event) => props.onLocation(event.target.value)} placeholder="Office or address" /></Field><Field label="Description and thread context"><Textarea value={props.description} onChange={(event) => props.onDescription(event.target.value)} className="min-h-28" /></Field>{!props.editingBooking && <label className="flex items-center gap-3 rounded-xl bg-[#f5f7f6] p-4 text-sm"><input type="checkbox" checked={props.addMeetLink} onChange={(event) => props.onAddMeetLink(event.target.checked)} /><Video className="h-4 w-4" /> Add Google Meet link</label>}<Button className="h-10 w-full" disabled={!canBook} onClick={props.onReviewBooking}><CalendarDays /> Review {props.editingBooking ? "update" : "booking"}</Button><p className="text-center text-[11px] leading-4 text-black/35">Reviewing does not change your calendar. A final confirmation follows.</p></div></div>
-    </div>
-  </section>;
-}
-
-function MeetingsView(props: { calendar?: CalendarData; meetingRequests: MeetingRequestListItem[]; timezone: string; loading: boolean; onScheduleRequest: (item: MeetingRequestListItem) => void; onReschedule: (booking: CalendarBooking) => void; onCancel: (booking: CalendarBooking) => void; }) {
-  const bookings = props.calendar?.bookings.filter((item) => item.status === "confirmed") ?? [];
-  return <section><PageHeading eyebrow="Calendar operations" title="Meetings" description="Upcoming Google Calendar events and meeting requests detected from Gmail." />
-    <div className="grid gap-5 xl:grid-cols-2"><div className="rounded-2xl border border-black/[0.06] bg-white p-5 sm:p-6"><h2 className="text-sm font-semibold">Upcoming calendar</h2>{props.loading ? <LoadingBlock label="Loading Calendar…" /> : (props.calendar?.events.length ?? 0) === 0 ? <EmptyBlock title="No upcoming events" description="Confirmed bookings will appear here." /> : <div className="mt-4 space-y-3">{props.calendar!.events.map((event) => <article key={event.id} className="rounded-xl border border-black/[0.06] p-4"><div className="flex justify-between gap-3"><div><p className="font-semibold">{event.summary || "Untitled event"}</p><p className="mt-1 text-xs text-black/45">{formatDateTime(event.start.dateTime ?? event.start.date ?? "", props.timezone)}</p></div>{event.htmlLink && <a href={event.htmlLink} target="_blank" rel="noreferrer" aria-label="Open in Google Calendar"><ExternalLink className="h-4 w-4 text-black/35" /></a>}</div>{event.location && <p className="mt-3 flex items-center gap-2 text-xs text-black/45"><MapPin className="h-3 w-3" />{event.location}</p>}</article>)}</div>}</div>
-      <div className="space-y-5"><div className="rounded-2xl border border-black/[0.06] bg-white p-5 sm:p-6"><h2 className="text-sm font-semibold">CRM bookings</h2>{bookings.length === 0 ? <EmptyBlock title="No CRM bookings" description="Use the scheduling assistant to confirm one." /> : <div className="mt-4 space-y-3">{bookings.map((booking) => <article key={booking.id} className="rounded-xl bg-[#f5f7f6] p-4"><p className="font-semibold">{booking.title}</p><p className="mt-1 text-xs text-black/45">{formatDateRange(booking.startAt, booking.endAt, props.timezone)}</p><div className="mt-3 flex gap-2"><Button size="sm" variant="outline" onClick={() => props.onReschedule(booking)}>Reschedule</Button><Button size="sm" variant="ghost" onClick={() => props.onCancel(booking)}>Cancel</Button></div></article>)}</div>}</div>
-      <div className="rounded-2xl border border-black/[0.06] bg-white p-5 sm:p-6"><h2 className="text-sm font-semibold">Detected meeting requests</h2>{props.meetingRequests.length === 0 ? <EmptyBlock title="No requests detected" description="Scheduling language in synced emails will appear here." /> : <div className="mt-4 space-y-2">{props.meetingRequests.map((item) => <button type="button" key={item.request.id} onClick={() => props.onScheduleRequest(item)} className="flex w-full items-center justify-between rounded-xl border border-black/[0.06] p-4 text-left hover:bg-black/[0.02]"><div className="min-w-0"><p className="truncate text-sm font-semibold">{item.thread?.subject ?? "Meeting request"}</p><p className="mt-1 truncate text-xs text-black/45">{item.request.rawText}</p></div><ChevronRight className="h-4 w-4 shrink-0 text-black/30" /></button>)}</div>}</div></div></div>
-  </section>;
 }
 
 function PrivacyView(props: { session: SessionData; profilePending: boolean; onSaveProfile: (profile: { timezone: string; workingHoursStart: string; workingHoursEnd: string }) => void; onAccountAction: (action: AccountAction) => void; }) {
@@ -792,30 +902,129 @@ function PrivacyView(props: { session: SessionData; profilePending: boolean; onS
   const [workingHoursEnd, setWorkingHoursEnd] = useState(props.session.user.workingHoursEnd);
   const privacyQuery = useQuery({ queryKey: ["crm", "privacy-summary"], queryFn: () => api.get<PrivacySummary>("/api/privacy/data-access") });
   const auditQuery = useQuery({ queryKey: ["crm", "audit"], queryFn: () => api.get<{ logs: AuditLog[] }>("/api/privacy/audit-logs?limit=20") });
-  return <section><PageHeading eyebrow="Security and control" title="Privacy & settings" description="See what is stored, tune scheduling preferences, revoke access, or delete your data." />
-    <div className="grid gap-5 xl:grid-cols-2"><div className="space-y-5"><div className="rounded-2xl border border-black/[0.06] bg-white p-5 sm:p-6"><h2 className="flex items-center gap-2 text-sm font-semibold"><Settings className="h-4 w-4" /> Scheduling preferences</h2><div className="mt-5 space-y-4"><Field label="IANA timezone"><Input value={timezone} onChange={(event) => setTimezone(event.target.value)} placeholder="Asia/Singapore" /></Field><div className="grid grid-cols-2 gap-3"><Field label="Working day starts"><Input type="time" value={workingHoursStart} onChange={(event) => setWorkingHoursStart(event.target.value)} /></Field><Field label="Working day ends"><Input type="time" value={workingHoursEnd} onChange={(event) => setWorkingHoursEnd(event.target.value)} /></Field></div><Button onClick={() => props.onSaveProfile({ timezone, workingHoursStart, workingHoursEnd })} disabled={props.profilePending}>Save preferences</Button></div></div>
-      <div className="rounded-2xl border border-black/[0.06] bg-white p-5 sm:p-6"><h2 className="flex items-center gap-2 text-sm font-semibold"><Database className="h-4 w-4" /> Stored data</h2>{privacyQuery.data && <><div className="mt-4 grid grid-cols-2 gap-2">{Object.entries(privacyQuery.data.summary).map(([label, value]) => <div key={label} className="rounded-xl bg-[#f5f7f6] p-3"><p className="text-xl font-semibold">{value}</p><p className="mt-1 break-words text-[11px] text-black/40">{label}</p></div>)}</div><p className="mt-4 text-xs leading-5 text-black/45">{privacyQuery.data.description}</p></>}</div></div>
-      <div className="space-y-5"><div className="rounded-2xl border border-black/[0.06] bg-white p-5 sm:p-6"><h2 className="flex items-center gap-2 text-sm font-semibold"><ShieldCheck className="h-4 w-4" /> Data handling</h2><ul className="mt-4 space-y-3 text-sm text-black/55"><SafeLine text="OAuth tokens are AES-GCM encrypted at rest." /><SafeLine text="Session tokens are HMAC-hashed; raw tokens stay in HttpOnly cookies." /><SafeLine text="Email bodies are fetched on demand and not persisted." /><SafeLine text="No connected data is sent to external AI or used for model training." /><SafeLine text="Sends and calendar changes are recorded in a PII-masked audit log." /></ul></div>
-      <div className="rounded-2xl border border-black/[0.06] bg-white p-5 sm:p-6"><h2 className="text-sm font-semibold">Recent audit activity</h2><div className="mt-4 space-y-2">{auditQuery.data?.logs.map((log) => <div key={log.id} className="flex items-center justify-between gap-3 rounded-lg bg-[#f5f7f6] px-3 py-2 text-xs"><span>{log.action}</span><time className="text-black/35">{formatDate(log.createdAt)}</time></div>) ?? <p className="text-xs text-black/40">No audit activity yet.</p>}</div></div>
-      <div className="rounded-2xl border border-red-100 bg-white p-5 sm:p-6"><h2 className="text-sm font-semibold">Account controls</h2><div className="mt-4 flex flex-wrap gap-2"><Button variant="outline" onClick={() => props.onAccountAction("logout")}><LogOut /> Log out</Button><Button variant="outline" onClick={() => props.onAccountAction("disconnect")}><Unplug /> Disconnect Google</Button><Button variant="destructive" onClick={() => props.onAccountAction("delete")}><Trash2 /> Delete all data</Button></div></div></div></div>
-  </section>;
+  return (
+    <section>
+      <PageHeading eyebrow="Security and control" title="Settings" description="Manage scheduling preferences, connected data, account access, and audit history." />
+      <div className="grid gap-5 xl:grid-cols-2">
+        <div className="space-y-5">
+          <div className="rounded-lg border border-border bg-card p-5 shadow-sm sm:p-6">
+            <h2 className="flex items-center gap-2 text-sm font-semibold"><Settings className="h-4 w-4" /> Scheduling preferences</h2>
+            <div className="mt-5 space-y-4">
+              <Field label="IANA timezone"><Input value={timezone} onChange={(event) => setTimezone(event.target.value)} placeholder="Asia/Singapore" /></Field>
+              <div className="grid grid-cols-2 gap-3"><Field label="Working day starts"><Input type="time" value={workingHoursStart} onChange={(event) => setWorkingHoursStart(event.target.value)} /></Field><Field label="Working day ends"><Input type="time" value={workingHoursEnd} onChange={(event) => setWorkingHoursEnd(event.target.value)} /></Field></div>
+              <Button onClick={() => props.onSaveProfile({ timezone, workingHoursStart, workingHoursEnd })} disabled={props.profilePending}>Save preferences</Button>
+            </div>
+          </div>
+          <div className="rounded-lg border border-border bg-card p-5 shadow-sm sm:p-6">
+            <h2 className="flex items-center gap-2 text-sm font-semibold"><Database className="h-4 w-4" /> Stored data</h2>
+            {privacyQuery.data && <><div className="mt-4 grid grid-cols-2 gap-2">{Object.entries(privacyQuery.data.summary).map(([label, value]) => <div key={label} className="rounded-md border border-border bg-muted/40 p-3"><p className="text-xl font-semibold">{value}</p><p className="mt-1 break-words text-[11px] text-muted-foreground">{label}</p></div>)}</div><p className="mt-4 text-xs leading-5 text-muted-foreground">{privacyQuery.data.description}</p></>}
+          </div>
+        </div>
+        <div className="space-y-5">
+          <div className="rounded-lg border border-border bg-card p-5 shadow-sm sm:p-6">
+            <h2 className="flex items-center gap-2 text-sm font-semibold"><ShieldCheck className="h-4 w-4" /> Data handling</h2>
+            <ul className="mt-4 space-y-3 text-sm text-muted-foreground"><SafeLine text="OAuth tokens are AES-GCM encrypted at rest." /><SafeLine text="Session tokens are HMAC-hashed; raw tokens stay in HttpOnly cookies." /><SafeLine text="Email bodies are fetched on demand and not persisted." /><SafeLine text="Only when you request a reply suggestion, minimized recent context is sent to OpenRouter with contact details, tokens, and links masked where possible and provider data collection denied." /><SafeLine text="Sends and calendar changes are recorded in a PII-masked audit log." /></ul>
+          </div>
+          <div className="rounded-lg border border-border bg-card p-5 shadow-sm sm:p-6">
+            <h2 className="text-sm font-semibold">Recent audit activity</h2>
+            <div className="mt-4 space-y-2">{auditQuery.data?.logs.map((log) => <div key={log.id} className="flex items-center justify-between gap-3 rounded-md bg-muted/40 px-3 py-2 text-xs"><span>{log.action}</span><time className="text-muted-foreground">{formatDate(log.createdAt)}</time></div>) ?? <p className="text-xs text-muted-foreground">No audit activity yet.</p>}</div>
+          </div>
+          <div className="rounded-lg border border-red-200 bg-card p-5 shadow-sm sm:p-6">
+            <h2 className="text-sm font-semibold">Account controls</h2>
+            <div className="mt-4 flex flex-wrap gap-2"><Button variant="outline" onClick={() => props.onAccountAction("logout")}><LogOut /> Log out</Button><Button variant="outline" onClick={() => props.onAccountAction("disconnect")}><Unplug /> Disconnect Google</Button><Button variant="destructive" onClick={() => props.onAccountAction("delete")}><Trash2 /> Delete all data</Button></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
 }
 
-function PageHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) { return <div className="mb-5 flex flex-wrap items-end justify-between gap-4"><div><p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#397454]">{eyebrow}</p><h1 className="mt-2 text-3xl font-semibold tracking-[-0.04em] sm:text-4xl">{title}</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-black/45">{description}</p></div>{action}</div>; }
-function NavButton({ active, icon: Icon, label, count, onClick }: { active: boolean; icon: React.ComponentType<{ className?: string }>; label: string; count?: number; onClick: () => void; }) { return <button type="button" onClick={onClick} className={`flex min-w-0 items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium transition lg:justify-start ${active ? "bg-[#183d2c] text-white" : "text-black/50 hover:bg-black/[0.04]"}`}><Icon className="h-4 w-4 shrink-0" /><span className="hidden lg:inline">{label}</span>{count !== undefined && count > 0 && <span className={`ml-auto hidden rounded-full px-2 py-0.5 text-[10px] lg:inline ${active ? "bg-white/15" : "bg-black/[0.06]"}`}>{count}</span>}</button>; }
-function Metric({ label, value, icon: Icon }: { label: string; value?: number; icon: React.ComponentType<{ className?: string }> }) { return <div className="rounded-2xl border border-black/[0.06] bg-white p-5"><div className="flex items-center justify-between"><p className="text-xs font-medium text-black/40">{label}</p><Icon className="h-4 w-4 text-[#4d8062]" /></div><p className="mt-4 text-3xl font-semibold tracking-[-0.04em]">{value ?? "—"}</p></div>; }
-function FilterSelect<T extends string>({ label, value, values, onChange }: { label: string; value: string; values: readonly T[]; onChange: (value: string) => void; }) { return <select value={value} onChange={(event) => onChange(event.target.value)} className="h-9 w-full rounded-lg border border-black/10 bg-white px-3 text-xs capitalize outline-none focus:ring-1 focus:ring-[#397454]"><option value="">{label}</option>{values.map((item) => <option key={item} value={item}>{item}</option>)}</select>; }
-function ThreadRow({ thread, active, checked, onCheck, onOpen }: { thread: EmailThread; active: boolean; checked: boolean; onCheck: () => void; onOpen: () => void; }) { return <div className={`flex border-b border-black/[0.05] p-4 transition ${active ? "bg-[#edf6f0]" : "hover:bg-black/[0.02]"}`}><input type="checkbox" checked={checked} onChange={onCheck} onClick={(event) => event.stopPropagation()} className="mt-1 h-4 w-4 shrink-0" aria-label={`Select ${thread.subject}`} /><button type="button" onClick={onOpen} className="min-w-0 flex-1 pl-3 text-left"><div className="flex items-center gap-2"><span className={`truncate text-sm ${thread.hasUnread ? "font-semibold" : "font-medium"}`}>{thread.fromName || thread.fromEmail || "Unknown sender"}</span><span className={`ml-auto rounded-full px-2 py-0.5 text-[9px] font-semibold uppercase ${priorityClass(thread.priority)}`}>{thread.priority}</span></div><p className="mt-1 truncate text-sm font-medium">{thread.subject || "(No subject)"}</p><p className="mt-1 line-clamp-2 text-xs leading-5 text-black/40">{thread.snippet}</p><div className="mt-2 flex items-center gap-2 text-[10px] text-black/35"><span className="capitalize">{thread.category}</span>{thread.requiresResponse && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-800">Reply needed</span>}<span className="ml-auto">{thread.lastMessageDate ? formatDate(thread.lastMessageDate) : ""}</span></div></button></div>; }
-function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="block"><span className="mb-1.5 block text-xs font-medium text-black/45">{label}</span>{children}</label>; }
-function EditableLabel({ label, children }: { label: string; children: React.ReactNode }) { return <div><p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-black/35">{label}</p>{children}</div>; }
-function LoadingBlock({ label }: { label: string }) { return <div className="flex min-h-44 items-center justify-center gap-2 p-8 text-sm text-black/40"><Loader2 className="h-4 w-4 animate-spin" />{label}</div>; }
-function EmptyBlock({ title, description }: { title: string; description: string }) { return <div className="flex min-h-44 flex-col items-center justify-center p-8 text-center"><div className="grid h-10 w-10 place-items-center rounded-full bg-[#eef2ef]"><Mail className="h-4 w-4 text-black/35" /></div><p className="mt-3 text-sm font-semibold">{title}</p><p className="mt-1 max-w-xs text-xs leading-5 text-black/40">{description}</p></div>; }
-function SafeLine({ text }: { text: string }) { return <li className="flex gap-3"><Check className="mt-0.5 h-4 w-4 shrink-0 text-[#397454]" />{text}</li>; }
+function PageHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) { return <div className="mb-5 flex flex-wrap items-end justify-between gap-4"><div><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{eyebrow}</p><h1 className="mt-1.5 text-2xl font-semibold tracking-tight sm:text-3xl">{title}</h1><p className="mt-1.5 max-w-2xl text-sm leading-6 text-muted-foreground">{description}</p></div>{action}</div>; }
+function NavButton({ active, icon: Icon, label, count, onClick }: { active: boolean; icon: React.ComponentType<{ className?: string }>; label: string; count?: number; onClick: () => void; }) { return <button type="button" onClick={onClick} aria-current={active ? "page" : undefined} className={`relative flex h-10 shrink-0 items-center gap-2 border-b-2 px-0 text-[13px] font-medium transition-colors ${active ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}><Icon className="h-3.5 w-3.5 shrink-0" /><span>{label}</span>{count !== undefined && count > 0 && <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">{count}</span>}</button>; }
+function FilterSelect<T extends string>({ label, value, values, onChange }: { label: string; value: string; values: readonly T[]; onChange: (value: string) => void; }) { return <select value={value} onChange={(event) => onChange(event.target.value)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs capitalize outline-none focus:ring-1 focus:ring-ring"><option value="">{label}</option>{values.map((item) => <option key={item} value={item}>{item}</option>)}</select>; }
+function ThreadRow({ thread, active, checked, onCheck, onOpen }: { thread: EmailThread; active: boolean; checked: boolean; onCheck: () => void; onOpen: () => void; }) {
+  return (
+    <div className={`group flex border-b border-border transition-colors last:border-b-0 ${active ? "bg-muted" : thread.hasUnread ? "bg-background hover:bg-muted/60" : "bg-muted/20 hover:bg-muted/60"}`}>
+      <label className="flex w-10 shrink-0 items-start justify-center pt-4">
+        <input type="checkbox" checked={checked} onChange={onCheck} onClick={(event) => event.stopPropagation()} className="h-4 w-4 rounded border-input" aria-label={`Select ${thread.subject}`} />
+      </label>
+      <button type="button" onClick={onOpen} className="min-w-0 flex-1 py-3 pr-3 text-left">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${thread.hasUnread ? "bg-blue-600" : "bg-transparent"}`} aria-hidden="true" />
+          <span className={`truncate text-[13px] ${thread.hasUnread ? "font-semibold text-foreground" : "font-medium text-muted-foreground"}`}>{thread.fromName || thread.fromEmail || "Unknown sender"}</span>
+          <time className={`ml-auto shrink-0 text-[10px] ${thread.hasUnread ? "font-medium text-foreground" : "text-muted-foreground"}`}>{thread.lastMessageDate ? formatInboxDate(thread.lastMessageDate) : ""}</time>
+        </div>
+        <p className={`mt-1 truncate text-[13px] ${thread.hasUnread ? "font-semibold" : "font-medium"}`}>{thread.subject || "(No subject)"}</p>
+        <p className="mt-0.5 truncate text-xs text-muted-foreground">{thread.snippet || "No message preview"}</p>
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <span className="rounded border border-border bg-background px-1.5 py-0.5 text-[9px] font-medium capitalize text-muted-foreground">{thread.category}</span>
+          <span className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase ${priorityClass(thread.priority)}`}>{thread.priority}</span>
+          {thread.requiresResponse && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-medium text-amber-800">Reply needed</span>}
+        </div>
+      </button>
+    </div>
+  );
+}
+function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="block"><span className="mb-1.5 block text-xs font-medium text-muted-foreground">{label}</span>{children}</label>; }
+function EditableLabel({ label, children }: { label: string; children: React.ReactNode }) { return <div><p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>{children}</div>; }
+function LoadingBlock({ label }: { label: string }) { return <div className="flex min-h-44 items-center justify-center gap-2 p-8 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />{label}</div>; }
+function EmptyBlock({ title, description }: { title: string; description: string }) { return <div className="flex min-h-44 flex-col items-center justify-center p-8 text-center"><div className="grid h-10 w-10 place-items-center rounded-full bg-muted"><Mail className="h-4 w-4 text-muted-foreground" /></div><p className="mt-3 text-sm font-semibold">{title}</p><p className="mt-1 max-w-xs text-xs leading-5 text-muted-foreground">{description}</p></div>; }
+function SafeLine({ text }: { text: string }) { return <li className="flex gap-3"><Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />{text}</li>; }
 function toggleSet(current: Set<string>, value: string) { const next = new Set(current); if (next.has(value)) next.delete(value); else next.add(value); return next; }
-function priorityClass(priority: EmailPriority) { if (priority === "critical") return "bg-red-100 text-red-700"; if (priority === "high") return "bg-amber-100 text-amber-800"; if (priority === "low") return "bg-black/[0.05] text-black/45"; return "bg-[#e8f5ec] text-[#2d6844]"; }
+function priorityClass(priority: EmailPriority) { if (priority === "critical") return "bg-red-100 text-red-700"; if (priority === "high") return "bg-amber-100 text-amber-800"; if (priority === "low") return "bg-muted text-muted-foreground"; return "bg-slate-100 text-slate-600"; }
 function formatDate(value: string) { const numberValue = Number(value); const date = new Date(Number.isFinite(numberValue) && numberValue > 1e12 ? numberValue : value); return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("en-SG", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }).format(date); }
+function formatInboxDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const now = new Date();
+  if (date.toDateString() === now.toDateString()) {
+    return new Intl.DateTimeFormat("en-SG", { hour: "numeric", minute: "2-digit" }).format(date);
+  }
+  return new Intl.DateTimeFormat("en-SG", date.getFullYear() === now.getFullYear() ? { day: "numeric", month: "short" } : { day: "numeric", month: "short", year: "2-digit" }).format(date);
+}
+function cleanEmailBody(value: string) {
+  const lines = value.replace(/\r\n/g, "\n").split("\n");
+  const visible: string[] = [];
+  let skippingRemoteAsset = false;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    const trimmed = line.trim();
+    const next = lines[index + 1]?.trim() ?? "";
+
+    if (skippingRemoteAsset) {
+      if (trimmed.endsWith(")")) skippingRemoteAsset = false;
+      continue;
+    }
+
+    if (/\($/.test(trimmed) && /^https?:\/\//i.test(next)) {
+      skippingRemoteAsset = true;
+      continue;
+    }
+
+    if (/^https?:\/\//i.test(trimmed)) {
+      if (trimmed.length > 90 || /(?:ablink|click|track|utm_|mc_[ce]id|trk)/i.test(trimmed)) {
+        continue;
+      }
+    }
+
+    const withoutTrackingLinks = line
+      .replace(/https?:\/\/\S*(?:ablink|click|track|utm_|mc_[ce]id|trk)\S*/gi, "")
+      .replace(/https?:\/\/\S{120,}/gi, "")
+      .trimEnd();
+    if (withoutTrackingLinks.trim() || visible.at(-1)?.trim()) {
+      visible.push(withoutTrackingLinks);
+    }
+  }
+
+  const cleaned = visible.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return cleaned || "No readable text content in this message.";
+}
+function hasSchedulingIntent(value: string) { return /\b(meet|meeting|schedule|call|appointment|availability|free at|available on|book a time|time slot|sync up|catch up|catchup|let'?s talk|discussion)\b/i.test(value); }
 function formatDateTime(value: string, timezone: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("en-SG", { timeZone: timezone, weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" }).format(date); }
 function formatTime(value: string, timezone: string) { return new Intl.DateTimeFormat("en-SG", { timeZone: timezone, hour: "numeric", minute: "2-digit" }).format(new Date(value)); }
 function formatDateRange(start: string, end: string, timezone: string) { return `${formatDateTime(start, timezone)} – ${formatTime(end, timezone)}`; }
 function firstError(...errors: unknown[]) { return errors.find(Boolean); }
+function isActionRequired(error: unknown) { return error instanceof ApiClientError && ["GOOGLE_REAUTH_REQUIRED", "GOOGLE_PERMISSION_REQUIRED", "UNAUTHORIZED"].includes(error.code); }
+function actionRequiredError(error: unknown) { return isActionRequired(error) ? error : undefined; }
 function errorMessage(error: unknown) { return error instanceof Error ? error.message : "Something went wrong. Please try again."; }

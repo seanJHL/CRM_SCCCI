@@ -55,3 +55,16 @@ describe("CRM route protection", () => {
     expect(privacy.status).toBe(401);
   });
 });
+
+describe("Google OAuth configuration", () => {
+  it("fails clearly instead of redirecting with an empty client ID", async () => {
+    const res = await app.request("/api/auth/google", undefined, {
+      GOOGLE_CLIENT_ID: "",
+      GOOGLE_CLIENT_SECRET: "",
+    });
+
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.error.code).toBe("GOOGLE_OAUTH_NOT_CONFIGURED");
+  });
+});

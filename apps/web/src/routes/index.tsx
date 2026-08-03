@@ -208,7 +208,8 @@ function CalendarHomePage() {
   });
 
   const deleteEventMutation = useMutation({
-    mutationFn: (id: string) => api.delete(`/api/events/${id}`),
+    mutationFn: (id: string) =>
+      api.delete(`/api/events/${id}`, { confirmed: true }),
     onSuccess: () => setDialogOpen(false),
     onSettled: invalidateEvents,
   });

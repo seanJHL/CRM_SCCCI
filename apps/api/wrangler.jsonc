@@ -14,7 +14,7 @@
   "vars": {
     "ENVIRONMENT": "development",
     "CORS_ORIGIN": "http://localhost:3001",
-    "GOOGLE_REDIRECT_URI": "http://localhost:8787/api/auth/google/callback"
+    "GOOGLE_REDIRECT_URI": "http://localhost:8788/api/auth/google/callback"
   },
   "env": {
     "preview": {

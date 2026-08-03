@@ -16,8 +16,42 @@ interface RouterContext {
 
 const MOBILE_VIEW_QUERY = "(max-width: 820px)";
 const DESKTOP_VIEW_KEY = "ember:desktop-view";
+const DEV_SERVICE_WORKER_RESET = `
+(() => {
+  const hostname = window.location.hostname;
+  if (hostname !== "localhost" && hostname !== "127.0.0.1") return;
+
+  const resetKey = "sccci:dev-service-worker-reset:v1";
+  if (window.sessionStorage.getItem(resetKey) === "done") return;
+
+  const registrations = "serviceWorker" in navigator
+    ? navigator.serviceWorker.getRegistrations()
+    : Promise.resolve([]);
+  const cacheNames = "caches" in window ? window.caches.keys() : Promise.resolve([]);
+
+  Promise.all([registrations, cacheNames])
+    .then(async ([activeRegistrations, names]) => {
+      const emberCaches = names.filter((name) => name.startsWith("ember-"));
+      const needsReload = activeRegistrations.length > 0 || emberCaches.length > 0;
+
+      await Promise.all([
+        ...activeRegistrations.map((registration) => registration.unregister()),
+        ...emberCaches.map((name) => window.caches.delete(name)),
+      ]);
+
+      window.sessionStorage.setItem(resetKey, "done");
+      if (needsReload) window.location.reload();
+    })
+    .catch(() => {
+      window.sessionStorage.setItem(resetKey, "done");
+    });
+})();
+`;
 
 function getMobileDestination(pathname: string) {
+  if (pathname === "/crm" || pathname.startsWith("/crm/")) {
+    return "/m/crm";
+  }
   if (pathname === "/reminders" || pathname.startsWith("/reminders/")) {
     return "/m/reminders";
   }
@@ -194,13 +228,15 @@ function RootComponent() {
   });
   const isMobileRoute = pathname === "/m" || pathname.startsWith("/m/");
   const isCrmExperience =
-    pathname === "/crm" ||
     pathname === "/login" ||
     pathname === "/privacy-policy";
 
   return (
     <html lang="en" className={isMobileRoute ? "ember-mobile-active" : undefined}>
       <head>
+        {import.meta.env.DEV && (
+          <script dangerouslySetInnerHTML={{ __html: DEV_SERVICE_WORKER_RESET }} />
+        )}
         <HeadContent />
       </head>
       <body className={isMobileRoute ? "ember-mobile-active" : undefined}>

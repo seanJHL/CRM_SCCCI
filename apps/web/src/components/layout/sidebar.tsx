@@ -8,6 +8,7 @@ import {
   Zap,
   CircleDot,
   CheckCircle2,
+  Mail,
   Smartphone,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -15,6 +16,7 @@ import { cn } from "@/lib/utils";
 const navItems = [
   { to: "/", label: "Today", icon: CircleDot },
   { to: "/", label: "Calendar", icon: CalendarDays },
+  { to: "/crm", label: "CRM", icon: Mail },
   { to: "/workouts", label: "Habits", icon: CheckCircle2 },
   { to: "/reminders", label: "Reminders", icon: Bell },
   { to: "/m", label: "Mobile view", icon: Smartphone },
