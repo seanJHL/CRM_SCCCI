@@ -115,6 +115,8 @@ gmailRoute.get("/", async (c) => {
   const status = c.req.query("status");
   const requiresResponse = c.req.query("requiresResponse");
   const sender = c.req.query("sender");
+  const unreadOnly = c.req.query("unreadOnly") === "true";
+  const urgentOnly = c.req.query("urgentOnly") === "true";
   const refresh = c.req.query("refresh") === "true";
 
   // If we have cached threads and not refreshing, return them
@@ -125,6 +127,8 @@ gmailRoute.get("/", async (c) => {
     if (status) conditions.push(eq(emailThreads.status, status));
     if (requiresResponse === "true") conditions.push(eq(emailThreads.requiresResponse, true));
     if (sender) conditions.push(sql`${emailThreads.fromEmail} ILIKE ${`%${sender}%`}`);
+    if (unreadOnly) conditions.push(eq(emailThreads.hasUnread, true));
+    if (urgentOnly) conditions.push(inArray(emailThreads.priority, ["critical", "high"]));
 
     const cached = await db
       .select()
@@ -171,6 +175,8 @@ gmailRoute.get("/", async (c) => {
   if (status) filtered = filtered.filter((t) => t.status === status);
   if (requiresResponse === "true") filtered = filtered.filter((t) => t.requiresResponse);
   if (sender) filtered = filtered.filter((t) => t.fromEmail?.includes(sender));
+  if (unreadOnly) filtered = filtered.filter((t) => t.hasUnread);
+  if (urgentOnly) filtered = filtered.filter((t) => t.priority === "critical" || t.priority === "high");
 
   return c.json(ok({ threads: filtered, cached: false }));
 });
