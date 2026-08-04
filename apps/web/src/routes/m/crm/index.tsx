@@ -35,11 +35,13 @@ function MobileCrmInbox() {
   const [status, setStatus] = useState("");
   const [sender, setSender] = useState("");
   const [responseOnly, setResponseOnly] = useState(false);
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [urgentOnly, setUrgentOnly] = useState(false);
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  const filters = { category, priority, status, sender, responseOnly };
+  const filters = { category, priority, status, sender, responseOnly, unreadOnly, urgentOnly };
   const threadsQuery = useQuery({
     queryKey: ["crm", "threads", filters],
     queryFn: () => {
@@ -49,12 +51,64 @@ function MobileCrmInbox() {
       if (status) params.set("status", status);
       if (sender.trim()) params.set("sender", sender.trim());
       if (responseOnly) params.set("requiresResponse", "true");
+      if (unreadOnly) params.set("unreadOnly", "true");
+      if (urgentOnly) params.set("urgentOnly", "true");
       return api.get<{ threads: EmailThread[]; cached: boolean }>(`/api/gmail?${params}`);
     },
     staleTime: 30_000,
     refetchOnWindowFocus: true,
   });
-  const activeFilterCount = [category, priority, status, sender.trim(), responseOnly ? "on" : ""].filter(Boolean).length;
+  const activeFilterCount = [
+    category,
+    priority,
+    status,
+    sender.trim(),
+    responseOnly ? "on" : "",
+    unreadOnly ? "on" : "",
+    urgentOnly ? "on" : "",
+  ].filter(Boolean).length;
+  const resetManualFilters = () => {
+    setCategory("");
+    setPriority("");
+    setStatus("");
+    setSender("");
+  };
+  const handleTotalTap = () => {
+    resetManualFilters();
+    setResponseOnly(false);
+    setUnreadOnly(false);
+    setUrgentOnly(false);
+  };
+  const handleUnreadTap = () => {
+    if (unreadOnly) {
+      setUnreadOnly(false);
+      return;
+    }
+    resetManualFilters();
+    setResponseOnly(false);
+    setUrgentOnly(false);
+    setUnreadOnly(true);
+  };
+  const handleUrgentTap = () => {
+    if (urgentOnly) {
+      setUrgentOnly(false);
+      return;
+    }
+    resetManualFilters();
+    setResponseOnly(false);
+    setUnreadOnly(false);
+    setUrgentOnly(true);
+  };
+  const handleReplyTap = () => {
+    if (responseOnly) {
+      setResponseOnly(false);
+      return;
+    }
+    resetManualFilters();
+    setUnreadOnly(false);
+    setUrgentOnly(false);
+    setResponseOnly(true);
+  };
   const statsQuery = useQuery({
     queryKey: ["crm", "stats"],
     queryFn: () => api.get<{ stats: GmailStats }>("/api/gmail/stats"),
@@ -219,10 +273,28 @@ function MobileCrmInbox() {
       </div>
 
       <div className="m-card grid grid-cols-4 divide-x divide-[var(--m-border)] overflow-hidden">
-        <Stat label="Total" value={statsQuery.data?.stats.total} />
-        <Stat label="Unread" value={statsQuery.data?.stats.unread} color="var(--m-primary)" />
-        <Stat label="Urgent" value={statsQuery.data?.stats.urgent} color="#e0524a" />
-        <Stat label="Reply" value={statsQuery.data?.stats.requiresResponse} color="#4472ca" />
+        <Stat label="Total" value={statsQuery.data?.stats.total} active={activeFilterCount === 0} onClick={handleTotalTap} />
+        <Stat
+          label="Unread"
+          value={statsQuery.data?.stats.unread}
+          color="var(--m-primary)"
+          active={unreadOnly}
+          onClick={handleUnreadTap}
+        />
+        <Stat
+          label="Urgent"
+          value={statsQuery.data?.stats.urgent}
+          color="#e0524a"
+          active={urgentOnly}
+          onClick={handleUrgentTap}
+        />
+        <Stat
+          label="Reply"
+          value={statsQuery.data?.stats.requiresResponse}
+          color="#4472ca"
+          active={responseOnly}
+          onClick={handleReplyTap}
+        />
       </div>
 
       {topError && (
@@ -335,6 +407,8 @@ function MobileCrmInbox() {
                     setStatus("");
                     setSender("");
                     setResponseOnly(false);
+                    setUnreadOnly(false);
+                    setUrgentOnly(false);
                   }}
                   className="m-press text-[12px] font-semibold text-[var(--m-text-3)]"
                 >
@@ -344,21 +418,63 @@ function MobileCrmInbox() {
             </div>
 
             <div className="mt-4 space-y-3">
-              <MobileFilterSelect label="Category" value={category} values={CATEGORIES} onChange={setCategory} asPanel />
-              <MobileFilterSelect label="Priority" value={priority} values={PRIORITIES} onChange={setPriority} asPanel />
-              <MobileFilterSelect label="Status" value={status} values={STATUSES} onChange={setStatus} asPanel />
+              <MobileFilterSelect
+                label="Category"
+                value={category}
+                values={CATEGORIES}
+                onChange={(value) => {
+                  setCategory(value);
+                  setUnreadOnly(false);
+                  setUrgentOnly(false);
+                }}
+                asPanel
+              />
+              <MobileFilterSelect
+                label="Priority"
+                value={priority}
+                values={PRIORITIES}
+                onChange={(value) => {
+                  setPriority(value);
+                  setUnreadOnly(false);
+                  setUrgentOnly(false);
+                }}
+                asPanel
+              />
+              <MobileFilterSelect
+                label="Status"
+                value={status}
+                values={STATUSES}
+                onChange={(value) => {
+                  setStatus(value);
+                  setUnreadOnly(false);
+                  setUrgentOnly(false);
+                }}
+                asPanel
+              />
               <label className="block">
                 <span className="mb-1.5 block text-[10px] font-semibold text-[var(--m-text-2)]">Sender</span>
                 <input
                   value={sender}
-                  onChange={(event) => setSender(event.target.value)}
+                  onChange={(event) => {
+                    setSender(event.target.value);
+                    setUnreadOnly(false);
+                    setUrgentOnly(false);
+                  }}
                   placeholder="Filter by sender"
                   className="m-field w-full"
                 />
               </label>
               <div className="flex items-center justify-between gap-3 py-1">
                 <span className="text-[13px] font-medium text-[var(--m-text)]">Needs response only</span>
-                <TogglePill checked={responseOnly} onChange={setResponseOnly} label="Needs response only" />
+                <TogglePill
+                  checked={responseOnly}
+                  onChange={(next) => {
+                    setResponseOnly(next);
+                    setUnreadOnly(false);
+                    setUrgentOnly(false);
+                  }}
+                  label="Needs response only"
+                />
               </div>
             </div>
 
@@ -376,9 +492,27 @@ function MobileCrmInbox() {
   );
 }
 
-function Stat({ label, value, color }: { label: string; value?: number; color?: string }) {
+function Stat({
+  label,
+  value,
+  color,
+  active,
+  onClick,
+}: {
+  label: string;
+  value?: number;
+  color?: string;
+  active: boolean;
+  onClick: () => void;
+}) {
   return (
-    <div className="min-w-0 px-2 py-3 text-center">
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className="m-press w-full min-w-0 px-2 py-3 text-center transition-colors"
+      style={{ backgroundColor: active ? `${color ?? "var(--m-primary)"}1f` : undefined }}
+    >
       <p
         className="font-mono text-[18px] font-black tabular-nums"
         style={{ color: value ? (color ?? "var(--m-text)") : "var(--m-text-3)" }}
@@ -386,7 +520,7 @@ function Stat({ label, value, color }: { label: string; value?: number; color?: 
         {value ?? "—"}
       </p>
       <p className="mt-0.5 truncate text-[9px] font-bold uppercase tracking-[0.08em] text-[var(--m-text-3)]">{label}</p>
-    </div>
+    </button>
   );
 }
 
