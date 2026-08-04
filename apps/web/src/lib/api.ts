@@ -22,6 +22,67 @@ type LocalExercise = {
   updatedAt?: string;
 };
 
+type LocalGroupExerciseConfig = {
+  exerciseId: string;
+  position?: number;
+  defaultSets?: number;
+  defaultReps?: number;
+  defaultWeight?: number;
+  defaultDistanceKm?: number;
+  defaultDurationMinutes?: number;
+};
+
+type LocalWorkoutGroup = {
+  id: string;
+  name: string;
+  targetDays: string | null;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  exerciseConfigs?: LocalGroupExerciseConfig[];
+};
+
+type LocalSet = {
+  id: string;
+  sessionExerciseLogId: string;
+  setNumber: number;
+  weight: number | null;
+  reps: number | null;
+  distanceKm: number | null;
+  durationMinutes: number | null;
+  completedAt: string | null;
+};
+
+type LocalExerciseLog = {
+  id: string;
+  position: number;
+  exerciseId: string;
+  exerciseName: string;
+  exerciseCategory: string;
+  equipmentType: string;
+  trackingType: "strength" | "run";
+  sets: LocalSet[];
+};
+
+type LocalWorkoutSession = {
+  id: string;
+  groupId: string;
+  startedAt: string;
+  finishedAt: string | null;
+  status: string;
+  totalVolume: number;
+  totalSets: number;
+  durationMinutes: number | null;
+  exerciseLogs: LocalExerciseLog[];
+};
+
+/** A set enriched with its parent session's identity, used by the performance query. */
+type LocalSetWithSession = LocalSet & {
+  sessionId: string;
+  performedAt: string;
+  sessionStatus: string;
+};
+
 export { getApiUrl } from "@/lib/api-url";
 
 /** Standard error shape returned by the backend. */
@@ -251,7 +312,7 @@ async function localFallback(
     }
   }
 
-  const groups = readLocal<Record<string, any>[]>(LOCAL_KEYS.groups, []);
+  const groups = readLocal<LocalWorkoutGroup[]>(LOCAL_KEYS.groups, []);
   if (path === "/api/workouts/groups") {
     if (method === "GET") return { handled: true, data: groups };
     if (method === "POST") {
@@ -293,7 +354,7 @@ async function localFallback(
   if (groupMatch && method === "GET") {
     const group = groups.find((item) => item.id === groupMatch[1]);
     if (!group) return { handled: false };
-    const configs = (group.exerciseConfigs ?? []) as Record<string, any>[];
+    const configs = group.exerciseConfigs ?? [];
     return {
       handled: true,
       data: {
@@ -322,7 +383,7 @@ async function localFallback(
     };
   }
 
-  const sessions = readLocal<Record<string, any>[]>(LOCAL_KEYS.sessions, []);
+  const sessions = readLocal<LocalWorkoutSession[]>(LOCAL_KEYS.sessions, []);
   if (path === "/api/workouts/performance" && method === "GET") {
     const exerciseIds = (url.searchParams.get("exerciseIds") ?? "")
       .split(",")
@@ -330,16 +391,13 @@ async function localFallback(
     return {
       handled: true,
       data: exerciseIds.map((exerciseId) => {
-        const history = sessions.flatMap((session) =>
+        const history: LocalSetWithSession[] = sessions.flatMap((session) =>
           (session.exerciseLogs ?? [])
-            .filter(
-              (log: Record<string, unknown>) =>
-                log.exerciseId === exerciseId,
-            )
-            .flatMap((log: Record<string, any>) =>
+            .filter((log) => log.exerciseId === exerciseId)
+            .flatMap((log) =>
               (log.sets ?? [])
-                .filter((set: Record<string, unknown>) => set.completedAt)
-                .map((set: Record<string, unknown>) => ({
+                .filter((set) => set.completedAt)
+                .map((set) => ({
                   ...set,
                   sessionId: session.id,
                   performedAt: session.startedAt,
@@ -354,7 +412,7 @@ async function localFallback(
           (set) => Number(set.distanceKm ?? 0) > 0,
         );
         const bestSet =
-          history.reduce<Record<string, any> | null>((best, set) => {
+          history.reduce<LocalSetWithSession | null>((best, set) => {
             if (!best) return set;
             const score =
               Number(set.weight ?? 0) > 0
@@ -443,7 +501,7 @@ async function localFallback(
     const group = groups.find((item) => item.id === startMatch[1]);
     if (!group) return { handled: false };
     const sessionId = id();
-    const configs = (group.exerciseConfigs ?? []) as Record<string, any>[];
+    const configs = group.exerciseConfigs ?? [];
     const exerciseLogs = configs.map((config, index) => {
       const exercise = exercises.find((item) => item.id === config.exerciseId);
       const run = exercise?.trackingType === "run";
@@ -506,7 +564,7 @@ async function localFallback(
       if (session.id !== logMatch[1]) return session;
       return {
         ...session,
-        exerciseLogs: session.exerciseLogs.map((log: Record<string, any>) => {
+        exerciseLogs: session.exerciseLogs.map((log) => {
           if (log.id !== logMatch[2]) return log;
           let completed = false;
           return {
@@ -538,7 +596,7 @@ async function localFallback(
       if (session.id !== editSetMatch[1]) return session;
       return {
         ...session,
-        exerciseLogs: session.exerciseLogs.map((log: Record<string, any>) => {
+        exerciseLogs: session.exerciseLogs.map((log) => {
           if (log.id !== editSetMatch[2]) return log;
           return {
             ...log,
@@ -561,23 +619,18 @@ async function localFallback(
     /^\/api\/workouts\/sessions\/([^/]+)\/finish$/,
   );
   if (finishMatch && method === "POST") {
-    let finished: Record<string, any> | undefined;
+    let finished: LocalWorkoutSession | undefined;
     const next = sessions.map((session) => {
       if (session.id !== finishMatch[1]) return session;
-      const sets = session.exerciseLogs.flatMap(
-        (log: Record<string, any>) => log.sets,
-      );
-      const completed = sets.filter(
-        (set: Record<string, unknown>) => set.completedAt,
-      );
+      const sets = session.exerciseLogs.flatMap((log) => log.sets);
+      const completed = sets.filter((set) => set.completedAt);
       finished = {
         ...session,
         status: "completed",
         finishedAt: new Date().toISOString(),
         totalSets: completed.length,
         totalVolume: completed.reduce(
-          (sum: number, set: Record<string, any>) =>
-            sum + Number(set.weight ?? 0) * Number(set.reps ?? 0),
+          (sum, set) => sum + Number(set.weight ?? 0) * Number(set.reps ?? 0),
           0,
         ),
         durationMinutes: Math.max(
