@@ -247,6 +247,35 @@ export const reminders = pgTable("reminders", {
 });
 
 // ---------------------------------------------------------------------------
+// Quick Capture Tasks (checklists)
+// ---------------------------------------------------------------------------
+
+export const tasks = pgTable("tasks", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  title: text("title").notNull(),
+  dueAt: timestamp("due_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+// A task is "done" when every one of its items is completed — no separate
+// status flag on the task itself.
+export const taskItems = pgTable("task_items", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  taskId: uuid("task_id")
+    .notNull()
+    .references(() => tasks.id, { onDelete: "cascade" }),
+  label: text("label").notNull(),
+  completed: boolean("completed").notNull().default(false),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  position: integer("position").notNull().default(0),
+});
+
+// ---------------------------------------------------------------------------
 // Backward Plan Tasks
 // ---------------------------------------------------------------------------
 
@@ -521,6 +550,12 @@ export type NewEvent = typeof events.$inferInsert;
 
 export type EventCompletion = typeof eventCompletions.$inferSelect;
 export type NewEventCompletion = typeof eventCompletions.$inferInsert;
+
+export type Task = typeof tasks.$inferSelect;
+export type NewTask = typeof tasks.$inferInsert;
+
+export type TaskItem = typeof taskItems.$inferSelect;
+export type NewTaskItem = typeof taskItems.$inferInsert;
 
 export type WorkoutGroup = typeof workoutGroups.$inferSelect;
 export type NewWorkoutGroup = typeof workoutGroups.$inferInsert;

@@ -295,6 +295,62 @@ gmailRoute.post("/send", async (c) => {
   );
 });
 
+// --- GET /meeting-requests — detected scheduling requests for dashboard ---
+// Registered before /:threadId so "meeting-requests" isn't captured as a threadId param.
+
+gmailRoute.get("/meeting-requests", async (c) => {
+  const env = getEnv(c.env);
+  const db = createDatabase(env.databaseUrl);
+  const userId = c.get("userId");
+  const requests = await db
+    .select({ request: meetingRequests, thread: emailThreads })
+    .from(meetingRequests)
+    .leftJoin(emailThreads, eq(meetingRequests.threadId, emailThreads.id))
+    .where(eq(meetingRequests.userId, userId))
+    .orderBy(desc(meetingRequests.createdAt));
+
+  return c.json(ok({ meetingRequests: requests }));
+});
+
+// --- GET /stats — aggregate counts for dashboard ---
+// Registered before /:threadId so "stats" isn't captured as a threadId param.
+
+gmailRoute.get("/stats", async (c) => {
+  const env = getEnv(c.env);
+  const db = createDatabase(env.databaseUrl);
+  const userId = c.get("userId");
+
+  const allThreads = await db
+    .select()
+    .from(emailThreads)
+    .where(eq(emailThreads.userId, userId));
+
+  const stats = {
+    total: allThreads.length,
+    unread: allThreads.filter((t) => t.hasUnread).length,
+    urgent: allThreads.filter((t) => t.priority === "critical" || t.priority === "high").length,
+    requiresResponse: allThreads.filter((t) => t.requiresResponse).length,
+    byCategory: {
+      billing: allThreads.filter((t) => t.category === "billing").length,
+      scheduling: allThreads.filter((t) => t.category === "scheduling").length,
+      urgent: allThreads.filter((t) => t.category === "urgent").length,
+      support: allThreads.filter((t) => t.category === "support").length,
+      newsletter: allThreads.filter((t) => t.category === "newsletter").length,
+      general: allThreads.filter((t) => t.category === "general").length,
+    },
+    byStatus: {
+      unread: allThreads.filter((t) => t.status === "unread").length,
+      read: allThreads.filter((t) => t.status === "read").length,
+      replied: allThreads.filter((t) => t.status === "replied").length,
+      scheduled: allThreads.filter((t) => t.status === "scheduled").length,
+      archived: allThreads.filter((t) => t.status === "archived").length,
+      dismissed: allThreads.filter((t) => t.status === "dismissed").length,
+    },
+  };
+
+  return c.json(ok({ stats }));
+});
+
 // --- GET /:threadId — full thread detail ---
 
 gmailRoute.get("/:threadId", async (c) => {
@@ -864,60 +920,6 @@ gmailRoute.post("/bulk/replies", async (c) => {
   );
 });
 
-// --- GET /meeting-requests — detected scheduling requests for dashboard ---
-
-gmailRoute.get("/meeting-requests", async (c) => {
-  const env = getEnv(c.env);
-  const db = createDatabase(env.databaseUrl);
-  const userId = c.get("userId");
-  const requests = await db
-    .select({ request: meetingRequests, thread: emailThreads })
-    .from(meetingRequests)
-    .leftJoin(emailThreads, eq(meetingRequests.threadId, emailThreads.id))
-    .where(eq(meetingRequests.userId, userId))
-    .orderBy(desc(meetingRequests.createdAt));
-
-  return c.json(ok({ meetingRequests: requests }));
-});
-
-// --- GET /stats — aggregate counts for dashboard ---
-
-gmailRoute.get("/stats", async (c) => {
-  const env = getEnv(c.env);
-  const db = createDatabase(env.databaseUrl);
-  const userId = c.get("userId");
-
-  const allThreads = await db
-    .select()
-    .from(emailThreads)
-    .where(eq(emailThreads.userId, userId));
-
-  const stats = {
-    total: allThreads.length,
-    unread: allThreads.filter((t) => t.hasUnread).length,
-    urgent: allThreads.filter((t) => t.priority === "critical" || t.priority === "high").length,
-    requiresResponse: allThreads.filter((t) => t.requiresResponse).length,
-    byCategory: {
-      billing: allThreads.filter((t) => t.category === "billing").length,
-      scheduling: allThreads.filter((t) => t.category === "scheduling").length,
-      urgent: allThreads.filter((t) => t.category === "urgent").length,
-      support: allThreads.filter((t) => t.category === "support").length,
-      newsletter: allThreads.filter((t) => t.category === "newsletter").length,
-      general: allThreads.filter((t) => t.category === "general").length,
-    },
-    byStatus: {
-      unread: allThreads.filter((t) => t.status === "unread").length,
-      read: allThreads.filter((t) => t.status === "read").length,
-      replied: allThreads.filter((t) => t.status === "replied").length,
-      scheduled: allThreads.filter((t) => t.status === "scheduled").length,
-      archived: allThreads.filter((t) => t.status === "archived").length,
-      dismissed: allThreads.filter((t) => t.status === "dismissed").length,
-    },
-  };
-
-  return c.json(ok({ stats }));
-});
-
 export default gmailRoute;
 
 /**
@@ -1064,6 +1066,7 @@ function cachedThreadDetail(
     labelIds: cached.hasUnread ? ["INBOX", "UNREAD"] : ["INBOX"],
     headers: [],
     bodyText: cached.snippet ?? "",
+    bodyHtml: null,
     from: cached.fromEmail ?? "",
     fromName: cached.fromName ?? "",
     fromEmail: cached.fromEmail ?? "",

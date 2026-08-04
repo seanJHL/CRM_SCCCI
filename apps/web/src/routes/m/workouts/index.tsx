@@ -33,7 +33,7 @@ import {
 import { MobileErrorState } from "@/components/mobile/error-state";
 import { notify } from "@/components/mobile/notification-banner";
 import { ExerciseImage } from "@/components/workouts/exercise-image";
-import { EXERCISE_CATEGORIES } from "@/lib/exercise-data";
+import { EQUIPMENT_OPTIONS, EXERCISE_CATEGORIES } from "@/lib/exercise-data";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/m/workouts/")({
@@ -764,15 +764,6 @@ function ExerciseSearchField({
     </label>
   );
 }
-
-const EQUIPMENT_OPTIONS = [
-  ["free_weight", "Free weight"],
-  ["machine", "Machine"],
-  ["bodyweight", "Bodyweight"],
-  ["cardio", "Cardio machine"],
-  ["outdoor", "Outdoor"],
-  ["other", "Other"],
-] as const;
 
 function MobileCreateExercise({
   initialName,

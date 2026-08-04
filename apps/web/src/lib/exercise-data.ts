@@ -25,6 +25,16 @@ export const EXERCISE_CATEGORIES: Record<string, { label: string; order: number 
   mobility: { label: "Mobility", order: 7 },
 };
 
+/** Equipment type options for the exercise creation form */
+export const EQUIPMENT_OPTIONS = [
+  ["free_weight", "Free weight"],
+  ["machine", "Machine"],
+  ["bodyweight", "Bodyweight"],
+  ["cardio", "Cardio machine"],
+  ["outdoor", "Outdoor"],
+  ["other", "Other"],
+] as const;
+
 /** Popular picks shown at the top of the picker for quick selection */
 export const POPULAR_EXERCISE_IDS = [
   "ex-bench-press",

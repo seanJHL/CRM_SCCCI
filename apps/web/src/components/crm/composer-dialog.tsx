@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   CalendarDays,
+  ChevronDown,
   Loader2,
   RefreshCw,
   Save,
@@ -24,6 +25,7 @@ import {
   type ThreadDetailData,
 } from "@/lib/crm";
 import { queryKeys } from "@/lib/query-keys";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -43,6 +45,8 @@ interface ComposerDialogCommonProps {
   session: SessionData;
   invalidateInbox: () => Promise<void>;
   onNotice: (message: string) => void;
+  /** Matches the surrounding page's theme — the mobile CRM is dark, the desktop CRM is light (default). */
+  theme?: "light" | "dark";
 }
 
 interface RecentContact {
@@ -64,6 +68,7 @@ type ComposerDialogProps =
 export function ComposerDialog(props: ComposerDialogProps) {
   const queryClient = useQueryClient();
   const { session } = props;
+  const themeClass = props.theme === "dark" ? "dark" : "";
 
   const isReply = props.mode === "reply";
   const thread = isReply ? props.thread : undefined;
@@ -73,6 +78,7 @@ export function ComposerDialog(props: ComposerDialogProps) {
   const [replyDraftId, setReplyDraftId] = useState<string | null>(null);
   const [draftHydratedFor, setDraftHydratedFor] = useState<string | null>(null);
   const [sendConfirmationOpen, setSendConfirmationOpen] = useState(false);
+  const [schedulingOpen, setSchedulingOpen] = useState(false);
 
   const [parsedSchedule, setParsedSchedule] = useState<ParsedSchedule | null>(null);
   const [availability, setAvailability] = useState<AvailabilityResult | null>(null);
@@ -139,7 +145,14 @@ export function ComposerDialog(props: ComposerDialogProps) {
     setSelectedSlot(null);
     setAmbiguityConfirmed(false);
     setScheduleMessage(null);
+    setSchedulingOpen(false);
   }, [props.open, dialogKey]);
+
+  // A detected meeting time is easy to miss inside a collapsed section, so
+  // expand Scheduling automatically the moment something is found.
+  useEffect(() => {
+    if (parsedSchedule) setSchedulingOpen(true);
+  }, [parsedSchedule]);
 
   useEffect(() => {
     if (!isReply || !detail || draftHydratedFor === thread!.gmailThreadId) return;
@@ -403,7 +416,10 @@ export function ComposerDialog(props: ComposerDialogProps) {
           onPointerDownOutside={(event) => {
             if (!isReply && (toEmail.trim() || subject.trim() || replyBody.trim())) event.preventDefault();
           }}
-          className="bottom-0 left-0 top-auto flex h-[min(94dvh,920px)] w-full max-w-none translate-x-0 translate-y-0 flex-col overflow-hidden rounded-b-none rounded-t-2xl p-0 sm:bottom-auto sm:left-1/2 sm:top-1/2 sm:h-[min(90dvh,900px)] sm:max-w-4xl sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl"
+          className={cn(
+            "bottom-0 left-0 top-auto flex h-[min(94dvh,920px)] w-full max-w-none translate-x-0 translate-y-0 flex-col overflow-hidden rounded-b-none rounded-t-2xl p-0 sm:bottom-auto sm:left-1/2 sm:top-1/2 sm:h-[min(90dvh,900px)] sm:max-w-4xl sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl",
+            themeClass,
+          )}
         >
           <DialogHeader className="shrink-0 border-b border-border px-4 py-4 pr-12 sm:px-6">
             <DialogTitle>{isReply ? "Create draft" : "Compose message"}</DialogTitle>
@@ -416,7 +432,7 @@ export function ComposerDialog(props: ComposerDialogProps) {
 
           <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6 sm:py-5">
             {Boolean(composerError) && (
-              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900" role="alert">
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:border-amber-800/40 dark:bg-amber-950/40 dark:text-amber-200" role="alert">
                 <span>{errorMessage(composerError)}</span>
                 {composerError instanceof ApiClientError && ["GOOGLE_REAUTH_REQUIRED", "GOOGLE_PERMISSION_REQUIRED"].includes(composerError.code) && <a href={googleSignInUrl()} className="font-semibold underline">Reconnect Google</a>}
                 {composerError instanceof ApiClientError && composerError.code === "UNAUTHORIZED" && <a href="/login" className="font-semibold underline">Sign in again</a>}
@@ -476,101 +492,118 @@ export function ComposerDialog(props: ComposerDialogProps) {
             </section>
 
             <section className="rounded-lg border border-border bg-card">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
-                <div>
+              <button
+                type="button"
+                onClick={() => setSchedulingOpen((open) => !open)}
+                className="flex w-full flex-wrap items-center justify-between gap-3 px-4 py-3 text-left"
+                aria-expanded={schedulingOpen}
+              >
+                <div className="min-w-0">
                   <h3 className="flex items-center gap-2 text-sm font-semibold"><CalendarDays className="h-4 w-4" /> Scheduling</h3>
-                  <p className="mt-0.5 text-xs text-muted-foreground">{session.user.timezone} · working hours {session.user.workingHoursStart}–{session.user.workingHoursEnd}</p>
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => parseScheduleMutation.mutate({ text: schedulingContext, participantEmails: attendeeEmails })}
-                  disabled={!schedulingContext.trim() || parseScheduleMutation.isPending}
-                >
-                  {parseScheduleMutation.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                  Check availability
-                </Button>
-              </div>
-
-              <div className="space-y-4 p-4">
-                {parseScheduleMutation.isPending && !parsedSchedule && (
-                  <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Detecting meeting details and checking Calendar…</p>
-                )}
-                {!parseScheduleMutation.isPending && !parsedSchedule && (
-                  <p className="text-sm text-muted-foreground">
-                    {scheduleMessage ?? "No specific meeting time detected yet. Add a date or time to your reply and availability will be checked automatically."}
+                  <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                    {parsedSchedule
+                      ? `${parsedSchedule.interpretation} · ${availability?.available ? "Available" : "Conflict found"}`
+                      : `${session.user.timezone} · working hours ${session.user.workingHoursStart}–${session.user.workingHoursEnd}`}
                   </p>
-                )}
+                </div>
+                <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", schedulingOpen && "rotate-180")} />
+              </button>
 
-                {parsedSchedule && (
-                  <div className="space-y-3">
-                    <div className="flex flex-wrap items-start justify-between gap-3 rounded-md bg-muted/50 p-3">
-                      <div>
-                        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Interpreted as</p>
-                        <p className="mt-1 text-sm font-semibold">{parsedSchedule.interpretation}</p>
-                      </div>
-                      <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${availability?.available ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-900"}`}>
-                        {availability?.available ? "Available" : "Conflict found"}
-                      </span>
-                    </div>
-                    {availability && !availability.available && (
-                      <p className="text-xs text-amber-800">{availability.reason} Nearby available times are shown below.</p>
-                    )}
-                    {parsedSchedule.isAmbiguous && (
-                      <label className="flex items-start gap-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
-                        <input className="mt-1" type="checkbox" checked={ambiguityConfirmed} onChange={(event) => setAmbiguityConfirmed(event.target.checked)} />
-                        <span><strong>Confirm {parsedSchedule.interpretation}.</strong><br /><span className="text-xs text-amber-800">{parsedSchedule.ambiguityReason}</span></span>
-                      </label>
-                    )}
+              {schedulingOpen && (
+                <div className="border-t border-border">
+                  <div className="flex justify-end border-b border-border px-4 py-3">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => parseScheduleMutation.mutate({ text: schedulingContext, participantEmails: attendeeEmails })}
+                      disabled={!schedulingContext.trim() || parseScheduleMutation.isPending}
+                    >
+                      {parseScheduleMutation.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                      Check availability
+                    </Button>
                   </div>
-                )}
 
-                {suggestedSlots.length > 0 && (
-                  <div>
-                    <p className="mb-2 text-xs font-semibold">Recommended times</p>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      {suggestedSlots.map((slot) => (
-                        <div key={slot.start} className={`rounded-md border p-3 ${selectedSlot?.start === slot.start ? "border-foreground bg-muted/60 ring-1 ring-foreground" : "border-border"}`}>
-                          <button type="button" className="w-full text-left" onClick={() => setSelectedSlot(slot)}>
-                            <span className="block text-sm font-semibold">{formatDateTime(slot.start, session.user.timezone)}</span>
-                            <span className="mt-0.5 block text-xs text-muted-foreground">{formatTime(slot.start, session.user.timezone)}–{formatTime(slot.end, session.user.timezone)} · {session.user.timezone}</span>
-                          </button>
-                          <Button size="sm" variant="ghost" className="mt-2 h-7 px-2 text-xs" onClick={() => insertSlotIntoReply(slot)}>Insert into reply</Button>
+                  <div className="space-y-4 p-4">
+                    {parseScheduleMutation.isPending && !parsedSchedule && (
+                      <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Detecting meeting details and checking Calendar…</p>
+                    )}
+                    {!parseScheduleMutation.isPending && !parsedSchedule && (
+                      <p className="text-sm text-muted-foreground">
+                        {scheduleMessage ?? "No specific meeting time detected yet. Add a date or time to your reply and availability will be checked automatically."}
+                      </p>
+                    )}
+
+                    {parsedSchedule && (
+                      <div className="space-y-3">
+                        <div className="flex flex-wrap items-start justify-between gap-3 rounded-md bg-muted/50 p-3">
+                          <div>
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Interpreted as</p>
+                            <p className="mt-1 text-sm font-semibold">{parsedSchedule.interpretation}</p>
+                          </div>
+                          <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${availability?.available ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300" : "bg-amber-100 text-amber-900 dark:bg-amber-950/50 dark:text-amber-300"}`}>
+                            {availability?.available ? "Available" : "Conflict found"}
+                          </span>
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                        {availability && !availability.available && (
+                          <p className="text-xs text-amber-800 dark:text-amber-300">{availability.reason} Nearby available times are shown below.</p>
+                        )}
+                        {parsedSchedule.isAmbiguous && (
+                          <label className="flex items-start gap-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm dark:border-amber-800/40 dark:bg-amber-950/40">
+                            <input className="mt-1" type="checkbox" checked={ambiguityConfirmed} onChange={(event) => setAmbiguityConfirmed(event.target.checked)} />
+                            <span><strong>Confirm {parsedSchedule.interpretation}.</strong><br /><span className="text-xs text-amber-800 dark:text-amber-300">{parsedSchedule.ambiguityReason}</span></span>
+                          </label>
+                        )}
+                      </div>
+                    )}
 
-                {(parsedSchedule || suggestedSlots.length > 0) && (
-                  <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-2">
-                    <Field label="Meeting title"><Input value={meetingTitle} onChange={(event) => setMeetingTitle(event.target.value)} placeholder="Client catch-up" /></Field>
-                    <Field label="Participants"><Input value={attendeeText} onChange={(event) => setAttendeeText(event.target.value)} placeholder="alex@example.com" /></Field>
-                    <Field label="Location"><Input value={meetingLocation} onChange={(event) => setMeetingLocation(event.target.value)} placeholder="Office or address" /></Field>
-                    <label className="flex h-10 items-center gap-2 self-end rounded-md border border-border px-3 text-sm"><input type="checkbox" checked={addMeetLink} onChange={(event) => setAddMeetLink(event.target.checked)} /><Video className="h-4 w-4" /> Add Google Meet</label>
-                    <div className="sm:col-span-2"><Field label="Calendar description and email context"><Textarea value={meetingDescription} onChange={(event) => setMeetingDescription(event.target.value)} className="min-h-24" /></Field></div>
-                    <div className="flex flex-wrap items-center justify-between gap-2 sm:col-span-2">
-                      {!isReply && (
-                        <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <input
-                            type="checkbox"
-                            checked={attachMeeting}
-                            disabled={!canReviewBooking}
-                            onChange={(event) => setAttachMeeting(event.target.checked)}
-                          />
-                          Attach a calendar invite for this time
-                        </label>
-                      )}
-                      {isReply && (
-                        <p className="text-[11px] text-muted-foreground">A confirmation step appears before Calendar is changed.</p>
-                      )}
-                      {isReply && (
-                        <Button onClick={() => setBookingConfirmationOpen(true)} disabled={!canReviewBooking}><CalendarDays /> Create Calendar event</Button>
-                      )}
-                    </div>
+                    {suggestedSlots.length > 0 && (
+                      <div>
+                        <p className="mb-2 text-xs font-semibold">Recommended times</p>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {suggestedSlots.map((slot) => (
+                            <div key={slot.start} className={`rounded-md border p-3 ${selectedSlot?.start === slot.start ? "border-foreground bg-muted/60 ring-1 ring-foreground" : "border-border"}`}>
+                              <button type="button" className="w-full text-left" onClick={() => setSelectedSlot(slot)}>
+                                <span className="block text-sm font-semibold">{formatDateTime(slot.start, session.user.timezone)}</span>
+                                <span className="mt-0.5 block text-xs text-muted-foreground">{formatTime(slot.start, session.user.timezone)}–{formatTime(slot.end, session.user.timezone)} · {session.user.timezone}</span>
+                              </button>
+                              <Button size="sm" variant="ghost" className="mt-2 h-7 px-2 text-xs" onClick={() => insertSlotIntoReply(slot)}>Insert into reply</Button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {(parsedSchedule || suggestedSlots.length > 0) && (
+                      <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-2">
+                        <Field label="Meeting title"><Input value={meetingTitle} onChange={(event) => setMeetingTitle(event.target.value)} placeholder="Client catch-up" /></Field>
+                        <Field label="Participants"><Input value={attendeeText} onChange={(event) => setAttendeeText(event.target.value)} placeholder="alex@example.com" /></Field>
+                        <Field label="Location"><Input value={meetingLocation} onChange={(event) => setMeetingLocation(event.target.value)} placeholder="Office or address" /></Field>
+                        <label className="flex h-10 items-center gap-2 self-end rounded-md border border-border px-3 text-sm"><input type="checkbox" checked={addMeetLink} onChange={(event) => setAddMeetLink(event.target.checked)} /><Video className="h-4 w-4" /> Add Google Meet</label>
+                        <div className="sm:col-span-2"><Field label="Calendar description and email context"><Textarea value={meetingDescription} onChange={(event) => setMeetingDescription(event.target.value)} className="min-h-24" /></Field></div>
+                        <div className="flex flex-wrap items-center justify-between gap-2 sm:col-span-2">
+                          {!isReply && (
+                            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <input
+                                type="checkbox"
+                                checked={attachMeeting}
+                                disabled={!canReviewBooking}
+                                onChange={(event) => setAttachMeeting(event.target.checked)}
+                              />
+                              Attach a calendar invite for this time
+                            </label>
+                          )}
+                          {isReply && (
+                            <p className="text-[11px] text-muted-foreground">A confirmation step appears before Calendar is changed.</p>
+                          )}
+                          {isReply && (
+                            <Button onClick={() => setBookingConfirmationOpen(true)} disabled={!canReviewBooking}><CalendarDays /> Create Calendar event</Button>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                </div>
+              )}
             </section>
           </div>
 
@@ -596,7 +629,7 @@ export function ComposerDialog(props: ComposerDialogProps) {
       </Dialog>
 
       <Dialog open={sendConfirmationOpen} onOpenChange={setSendConfirmationOpen}>
-        <DialogContent className="max-w-xl p-6">
+        <DialogContent className={cn("max-w-xl p-6", themeClass)}>
           <DialogHeader>
             <DialogTitle>{isReply ? "Send this reply?" : "Send this message?"}</DialogTitle>
             <DialogDescription>Review the final recipient and message. This is the only step that sends email.</DialogDescription>
@@ -618,7 +651,7 @@ export function ComposerDialog(props: ComposerDialogProps) {
             )}
           </div>
           {(isReply ? sendReplyMutation.error : sendMessageMutation.error) && (
-            <p className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="alert">
+            <p className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800/40 dark:bg-amber-950/40 dark:text-amber-200" role="alert">
               {errorMessage(isReply ? sendReplyMutation.error : sendMessageMutation.error)}
             </p>
           )}
@@ -639,7 +672,7 @@ export function ComposerDialog(props: ComposerDialogProps) {
 
       {isReply && (
         <Dialog open={bookingConfirmationOpen} onOpenChange={setBookingConfirmationOpen}>
-          <DialogContent className="max-w-lg p-6">
+          <DialogContent className={cn("max-w-lg p-6", themeClass)}>
             <DialogHeader>
               <DialogTitle>Create this calendar event?</DialogTitle>
               <DialogDescription>No Calendar change occurs until you confirm below.</DialogDescription>
@@ -653,7 +686,7 @@ export function ComposerDialog(props: ComposerDialogProps) {
               </div>
             )}
             {bookingMutation.error && (
-              <p className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="alert">{errorMessage(bookingMutation.error)}</p>
+              <p className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800/40 dark:bg-amber-950/40 dark:text-amber-200" role="alert">{errorMessage(bookingMutation.error)}</p>
             )}
             <DialogFooter>
               <Button variant="outline" onClick={() => setBookingConfirmationOpen(false)}>Go back</Button>

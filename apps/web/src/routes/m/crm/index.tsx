@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Filter, Mail, RefreshCw, Settings, SquarePen } from "lucide-react";
 import { api, ApiClientError } from "@/lib/api";
-import { type EmailThread, type GmailStats, googleSignInUrl } from "@/lib/crm";
+import { type EmailCategory, type EmailThread, type GmailStats, googleSignInUrl } from "@/lib/crm";
 import { MobileErrorState } from "@/components/mobile/error-state";
 import { MobileCrmHeader } from "@/components/crm/mobile/mobile-crm-header";
 import { ComposerDialog } from "@/components/crm/composer-dialog";
@@ -128,7 +128,14 @@ function MobileCrmInbox() {
     return [...seen.entries()].map(([email, name]) => ({ email, name }));
   }, [threads]);
 
-  const topError = threadsQuery.error ?? statsQuery.error ?? gmailSyncQuery.error;
+  // `gmailSyncQuery` is a background refresh (mount + every 2 min + every
+  // window focus) that always hits live Gmail — a transient hiccup there
+  // must not block the screen when threadsQuery already has cached data to
+  // show. A reauth prompt is the exception: it's actionable and worth
+  // surfacing even while stale cached data is still on screen.
+  const reauthError = [threadsQuery.error, statsQuery.error, gmailSyncQuery.error].find(isActionRequired);
+  const blockingError = threadsQuery.data ? undefined : threadsQuery.error ?? statsQuery.error;
+  const topError = reauthError ?? blockingError;
 
   return (
     <div className="m-controller-page flex flex-col gap-4">
@@ -163,7 +170,7 @@ function MobileCrmInbox() {
         action into one row would overflow a narrow phone's width. This
         toolbar row has its own budget instead.
       */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5">
         <button
           type="button"
           onClick={() => void gmailSyncQuery.refetch()}
@@ -186,11 +193,12 @@ function MobileCrmInbox() {
             </span>
           )}
         </button>
+        <span className="mx-0.5 h-5 w-px bg-[var(--m-border)]" aria-hidden="true" />
         <button
           type="button"
           onClick={() => bulkClassifyMutation.mutate()}
           disabled={bulkClassifyMutation.isPending}
-          className="m-press flex h-11 items-center rounded-full border border-[var(--m-border)] px-2.5 text-[11px] font-semibold text-[var(--m-text-2)] disabled:opacity-40"
+          className="m-press flex h-9 items-center rounded-full px-2.5 text-[11.5px] font-medium text-[var(--m-text-3)] disabled:opacity-40"
         >
           Reclassify
         </button>
@@ -200,8 +208,10 @@ function MobileCrmInbox() {
             setSelectMode((current) => !current);
             setSelectedIds(new Set());
           }}
-          className={`m-press ml-auto flex h-11 items-center rounded-full px-3 text-[12px] font-semibold ${
-            selectMode ? "bg-[var(--m-primary)] text-[var(--m-primary-fg)]" : "border border-[var(--m-border)] text-[var(--m-text-2)]"
+          className={`m-press ml-auto flex h-9 items-center rounded-full border px-3 text-[12px] font-semibold ${
+            selectMode
+              ? "border-[var(--m-primary)]/50 bg-[var(--m-primary)]/15 text-[var(--m-primary)]"
+              : "border-[var(--m-border)] text-[var(--m-text-2)]"
           }`}
         >
           Select
@@ -210,9 +220,9 @@ function MobileCrmInbox() {
 
       <div className="m-card grid grid-cols-4 divide-x divide-[var(--m-border)] overflow-hidden">
         <Stat label="Total" value={statsQuery.data?.stats.total} />
-        <Stat label="Unread" value={statsQuery.data?.stats.unread} />
-        <Stat label="Urgent" value={statsQuery.data?.stats.urgent} />
-        <Stat label="Reply" value={statsQuery.data?.stats.requiresResponse} />
+        <Stat label="Unread" value={statsQuery.data?.stats.unread} color="var(--m-primary)" />
+        <Stat label="Urgent" value={statsQuery.data?.stats.urgent} color="#e0524a" />
+        <Stat label="Reply" value={statsQuery.data?.stats.requiresResponse} color="#4472ca" />
       </div>
 
       {topError && (
@@ -303,6 +313,7 @@ function MobileCrmInbox() {
           recentContacts={recentContacts}
           invalidateInbox={invalidateInbox}
           onNotice={(message) => notify({ title: message })}
+          theme="dark"
         />
       )}
 
@@ -333,9 +344,9 @@ function MobileCrmInbox() {
             </div>
 
             <div className="mt-4 space-y-3">
-              <MobileFilterSelect label="Category" value={category} values={CATEGORIES} onChange={setCategory} />
-              <MobileFilterSelect label="Priority" value={priority} values={PRIORITIES} onChange={setPriority} />
-              <MobileFilterSelect label="Status" value={status} values={STATUSES} onChange={setStatus} />
+              <MobileFilterSelect label="Category" value={category} values={CATEGORIES} onChange={setCategory} asPanel />
+              <MobileFilterSelect label="Priority" value={priority} values={PRIORITIES} onChange={setPriority} asPanel />
+              <MobileFilterSelect label="Status" value={status} values={STATUSES} onChange={setStatus} asPanel />
               <label className="block">
                 <span className="mb-1.5 block text-[10px] font-semibold text-[var(--m-text-2)]">Sender</span>
                 <input
@@ -365,13 +376,43 @@ function MobileCrmInbox() {
   );
 }
 
-function Stat({ label, value }: { label: string; value?: number }) {
+function Stat({ label, value, color }: { label: string; value?: number; color?: string }) {
   return (
-    <div className="min-w-0 px-2 py-2.5 text-center">
-      <p className="font-mono text-[16px] font-black tabular-nums text-[var(--m-text)]">{value ?? "—"}</p>
-      <p className="mt-0.5 truncate text-[8px] font-bold uppercase tracking-[0.08em] text-[var(--m-text-3)]">{label}</p>
+    <div className="min-w-0 px-2 py-3 text-center">
+      <p
+        className="font-mono text-[18px] font-black tabular-nums"
+        style={{ color: value ? (color ?? "var(--m-text)") : "var(--m-text-3)" }}
+      >
+        {value ?? "—"}
+      </p>
+      <p className="mt-0.5 truncate text-[9px] font-bold uppercase tracking-[0.08em] text-[var(--m-text-3)]">{label}</p>
     </div>
   );
+}
+
+const CATEGORY_COLOR: Record<EmailCategory, string> = {
+  billing: "#d9933c",
+  scheduling: "#4472ca",
+  urgent: "#e0524a",
+  support: "#4d9da8",
+  newsletter: "#9065b0",
+  general: "#8b919a",
+};
+
+const AVATAR_COLORS = ["#4472ca", "#4d9da8", "#6ba35e", "#d9933c", "#d15796", "#9065b0", "#d97706"];
+
+function avatarColor(name: string) {
+  let hash = 0;
+  for (let i = 0; i < name.length; i += 1) hash = (hash * 31 + name.charCodeAt(i)) % 997;
+  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+}
+
+function initials(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  const first = parts[0][0] ?? "?";
+  const last = parts.length > 1 ? parts[parts.length - 1][0] : "";
+  return (first + last).toUpperCase();
 }
 
 function MobileThreadRow({
@@ -387,10 +428,13 @@ function MobileThreadRow({
   onToggleCheck: () => void;
   onOpen: () => void;
 }) {
+  const displayName = thread.fromName || thread.fromEmail || "Unknown sender";
+  const color = avatarColor(displayName);
+
   return (
-    <div className="flex min-h-[76px] w-full items-center">
+    <div className="flex w-full items-start">
       {selectMode && (
-        <label className="flex h-full shrink-0 items-center px-3">
+        <label className="flex h-full shrink-0 items-center py-3.5 pl-3.5">
           <input
             type="checkbox"
             checked={checked}
@@ -403,31 +447,45 @@ function MobileThreadRow({
       <button
         type="button"
         onClick={selectMode ? onToggleCheck : onOpen}
-        className={`m-press flex min-h-[76px] flex-1 flex-col items-start gap-1 py-3 pr-3.5 text-left ${selectMode ? "" : "pl-3.5"}`}
+        className={`m-press flex flex-1 items-start gap-3 py-3.5 pr-3.5 text-left ${selectMode ? "pl-2.5" : "pl-3.5"}`}
       >
-        <div className="flex w-full min-w-0 items-center gap-2">
-          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${thread.hasUnread ? "bg-[var(--m-primary)]" : "bg-transparent"}`} aria-hidden="true" />
-          <span className={`truncate text-[13px] ${thread.hasUnread ? "font-semibold text-[var(--m-text)]" : "font-medium text-[var(--m-text-2)]"}`}>
-            {thread.fromName || thread.fromEmail || "Unknown sender"}
-          </span>
-          <time className="ml-auto shrink-0 text-[10px] text-[var(--m-text-3)]">
-            {thread.lastMessageDate ? formatInboxDate(thread.lastMessageDate) : ""}
-          </time>
-        </div>
-        <p className={`w-full truncate text-[13px] ${thread.hasUnread ? "font-semibold text-[var(--m-text)]" : "font-medium text-[var(--m-text-2)]"}`}>
-          {thread.subject || "(No subject)"}
-        </p>
-        <p className="w-full truncate text-[11px] text-[var(--m-text-3)]">{thread.snippet || "No message preview"}</p>
-        <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
-          <span className="rounded border border-[var(--m-border)] px-1.5 py-0.5 text-[9px] font-medium capitalize text-[var(--m-text-3)]">
-            {thread.category}
-          </span>
-          {thread.requiresResponse && (
-            <span className="rounded bg-[var(--m-primary)]/20 px-1.5 py-0.5 text-[9px] font-medium text-[var(--m-primary)]">
-              Reply needed
+        <span
+          className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[12px] font-bold text-white"
+          style={{
+            backgroundColor: thread.hasUnread ? color : `${color}55`,
+            boxShadow: thread.hasUnread ? `0 0 0 2px var(--m-surface), 0 0 0 3.5px ${color}` : undefined,
+          }}
+          aria-hidden="true"
+        >
+          {initials(displayName)}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-2">
+            <span className={`truncate text-[14px] ${thread.hasUnread ? "font-semibold text-[var(--m-text)]" : "font-medium text-[var(--m-text-3)]"}`}>
+              {displayName}
             </span>
-          )}
-        </div>
+            <time className="ml-auto shrink-0 text-[10.5px] text-[var(--m-text-3)]">
+              {thread.lastMessageDate ? formatInboxDate(thread.lastMessageDate) : ""}
+            </time>
+          </span>
+          <span className={`mt-0.5 block truncate text-[13.5px] ${thread.hasUnread ? "font-semibold text-[var(--m-text)]" : "font-medium text-[var(--m-text-2)]"}`}>
+            {thread.subject || "(No subject)"}
+          </span>
+          <span className="mt-0.5 block truncate text-[12.5px] leading-snug text-[var(--m-text-3)]">
+            {thread.snippet || "No message preview"}
+          </span>
+          <span className="mt-1.5 flex flex-wrap items-center gap-2.5">
+            <span className="flex items-center gap-1 text-[10px] font-semibold capitalize text-[var(--m-text-3)]">
+              <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: CATEGORY_COLOR[thread.category] }} />
+              {thread.category}
+            </span>
+            {thread.requiresResponse && (
+              <span className="rounded-full bg-[var(--m-primary)]/15 px-2 py-0.5 text-[10px] font-semibold text-[var(--m-primary)]">
+                Reply needed
+              </span>
+            )}
+          </span>
+        </span>
       </button>
     </div>
   );

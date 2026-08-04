@@ -25,6 +25,7 @@ export interface GmailMessage {
   labelIds: string[];
   headers: GmailMessageHeader[];
   bodyText: string;
+  bodyHtml: string | null;
   from: string;
   fromName: string;
   fromEmail: string;
@@ -167,6 +168,7 @@ export async function gmailGetThread(
       headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";
 
     const bodyText = cleanEmailText(extractMessageBody(msg.payload));
+    const bodyHtml = extractMessageHtml(msg.payload);
 
     const from = get("From");
     const { name, email } = parseFromHeader(from);
@@ -178,6 +180,7 @@ export async function gmailGetThread(
       labelIds: msg.labelIds ?? [],
       headers,
       bodyText,
+      bodyHtml,
       from,
       fromName: name,
       fromEmail: email,
@@ -496,6 +499,22 @@ function extractMessageBody(payload: GmailPayloadPart): string {
     .map((part) => htmlToText(decodeBase64Url(part.body!.data!)))
     .filter(Boolean);
   return htmlBodies.join("\n\n");
+}
+
+/**
+ * Extract the raw `text/html` part of a message, undecoded beyond base64 —
+ * unlike extractMessageBody, this is real markup meant for sanitized HTML
+ * rendering (not a plain-text approximation), so no tag-stripping happens.
+ */
+function extractMessageHtml(payload: GmailPayloadPart): string | null {
+  if (payload.mimeType === "text/html" && payload.body?.data) {
+    return decodeBase64Url(payload.body.data);
+  }
+
+  const htmlPart = flattenParts(payload.parts ?? []).find(
+    (part) => part.mimeType === "text/html" && part.body?.data,
+  );
+  return htmlPart ? decodeBase64Url(htmlPart.body!.data!) : null;
 }
 
 function flattenParts(parts: GmailPayloadPart[]): GmailPayloadPart[] {

@@ -24,6 +24,9 @@ export const queryKeys = {
     all: ["exercises"] as const,
     search: (q: string) => ["exercises", "search", q] as const,
   },
+  tasks: {
+    range: (from: string, to: string) => ["tasks", from, to] as const,
+  },
   habits: {
     all: ["habits"] as const,
     detail: (id: string) => ["habits", id] as const,
@@ -105,6 +108,24 @@ export interface Exercise {
   category: string;
   equipmentType: string;
   trackingType: "strength" | "run";
+}
+
+export interface TaskItem {
+  id: string;
+  taskId: string;
+  label: string;
+  completed: boolean;
+  completedAt: string | null;
+  position: number;
+}
+
+export interface Task {
+  id: string;
+  title: string;
+  dueAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  items: TaskItem[];
 }
 
 export interface GroupExercise {

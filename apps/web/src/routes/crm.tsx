@@ -1,10 +1,12 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
 import {
   AlertTriangle,
   Archive,
   Check,
+  ChevronDown,
   Database,
   Inbox,
   Info,
@@ -460,9 +462,9 @@ function InboxView(props: {
         <div className="p-3">
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[1fr_160px_140px_150px_auto]">
           <label className="relative"><Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={props.sender} onChange={(event) => props.onSender(event.target.value)} placeholder="Filter sender" className="h-9 pl-9" /></label>
-          <FilterSelect label="All categories" value={props.category} values={CATEGORIES} onChange={props.onCategory} />
-          <FilterSelect label="All priorities" value={props.priority} values={PRIORITIES} onChange={props.onPriority} />
-          <FilterSelect label="All statuses" value={props.status} values={STATUSES} onChange={props.onStatus} />
+          <FilterSelect label="Category" value={props.category} values={CATEGORIES} onChange={props.onCategory} />
+          <FilterSelect label="Priority" value={props.priority} values={PRIORITIES} onChange={props.onPriority} />
+          <FilterSelect label="Status" value={props.status} values={STATUSES} onChange={props.onStatus} />
           <label className="flex h-9 items-center gap-2 rounded-md border border-input bg-background px-3 text-xs"><input type="checkbox" checked={props.responseOnly} onChange={(event) => props.onResponseOnly(event.target.checked)} /> Needs response</label>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
@@ -495,15 +497,27 @@ function ThreadDetailPanel(props: Parameters<typeof InboxView>[0]) {
         <div><p className="text-xs font-medium text-muted-foreground">{props.selectedThread?.fromName || props.selectedThread?.fromEmail}</p><h2 className="mt-1 text-xl font-semibold tracking-tight">{props.detail.thread.subject || "(No subject)"}</h2></div>
         <Button onClick={props.onCreateDraft}><Sparkles /> Create Draft</Button>
       </div>
-      {classification && <div className="mt-5 grid gap-3 rounded-lg border border-border bg-muted/40 p-4 sm:grid-cols-[1fr_1fr_2fr]">
-        <EditableLabel label="Category"><FilterSelect label="Category" value={classification.category} values={CATEGORIES} onChange={(value) => props.onUpdate({ category: value as EmailCategory })} /></EditableLabel>
-        <EditableLabel label="Priority"><FilterSelect label="Priority" value={classification.priority} values={PRIORITIES} onChange={(value) => props.onUpdate({ priority: value as EmailPriority })} /></EditableLabel>
+      {classification && <div className="mt-5 space-y-3 rounded-lg border border-border bg-muted/40 p-3.5">
+        <div className="grid grid-cols-2 gap-2.5">
+          <EditableLabel label="Category"><FilterSelect label="Category" value={classification.category} values={CATEGORIES} onChange={(value) => props.onUpdate({ category: value as EmailCategory })} hideAllOption /></EditableLabel>
+          <EditableLabel label="Priority"><FilterSelect label="Priority" value={classification.priority} values={PRIORITIES} onChange={(value) => props.onUpdate({ priority: value as EmailPriority })} hideAllOption /></EditableLabel>
+        </div>
         <div><p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Why it matters</p><ul className="mt-2 space-y-1 text-xs text-muted-foreground">{classification.importanceReasons.length ? classification.importanceReasons.map((reason) => <li key={reason} className="flex gap-2"><Info className="mt-0.5 h-3 w-3 shrink-0" />{reason}</li>) : <li>No elevated importance signals found.</li>}</ul></div>
       </div>}
       {props.detail.stale && <div className="mt-4 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">Showing the latest cached preview while Gmail reconnects. This thread will retry automatically.</div>}
       <div className="mt-6 space-y-2">{props.detail.thread.messages.map((message) => <article key={message.id} className="overflow-hidden rounded-lg border border-border bg-background"><div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/30 px-4 py-3 text-xs"><span className="font-semibold">{message.fromName || message.fromEmail}</span><time className="text-muted-foreground">{formatDate(message.internalDate)}</time></div><p className="whitespace-pre-wrap break-words px-4 py-4 text-sm leading-6 text-foreground/80">{cleanEmailBody(message.bodyText || message.snippet)}</p></article>)}</div>
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-        <FilterSelect label="Update status" value={classification?.status ?? ""} values={STATUSES} onChange={(value) => props.onUpdate({ status: value as EmailStatus })} />
+        <div className="flex items-center gap-2.5">
+          <span className="text-xs font-medium text-muted-foreground">Status</span>
+          <FilterSelect
+            label="Status"
+            value={classification?.status ?? ""}
+            values={STATUSES}
+            onChange={(value) => props.onUpdate({ status: value as EmailStatus })}
+            hideAllOption
+            compact
+          />
+        </div>
         <Button onClick={props.onCreateDraft}><Sparkles /> Create Draft</Button>
       </div>
     </div>
@@ -555,7 +569,82 @@ function PrivacyView(props: { session: SessionData; profilePending: boolean; onS
 
 function PageHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) { return <div className="mb-5 flex flex-wrap items-end justify-between gap-4"><div><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{eyebrow}</p><h1 className="mt-1.5 text-2xl font-semibold tracking-tight sm:text-3xl">{title}</h1><p className="mt-1.5 max-w-2xl text-sm leading-6 text-muted-foreground">{description}</p></div>{action}</div>; }
 function NavButton({ active, icon: Icon, label, count, onClick }: { active: boolean; icon: React.ComponentType<{ className?: string }>; label: string; count?: number; onClick: () => void; }) { return <button type="button" onClick={onClick} aria-current={active ? "page" : undefined} className={`relative flex h-10 shrink-0 items-center gap-2 border-b-2 px-0 text-[13px] font-medium transition-colors ${active ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}><Icon className="h-3.5 w-3.5 shrink-0" /><span>{label}</span>{count !== undefined && count > 0 && <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">{count}</span>}</button>; }
-function FilterSelect<T extends string>({ label, value, values, onChange }: { label: string; value: string; values: readonly T[]; onChange: (value: string) => void; }) { return <select value={value} onChange={(event) => onChange(event.target.value)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs capitalize outline-none focus:ring-1 focus:ring-ring"><option value="">{label}</option>{values.map((item) => <option key={item} value={item}>{item}</option>)}</select>; }
+function pluralizeAllLabel(label: string) {
+  const lower = label.toLowerCase();
+  if (lower.endsWith("y")) return `All ${lower.slice(0, -1)}ies`;
+  if (lower.endsWith("s")) return `All ${lower}es`;
+  return `All ${lower}s`;
+}
+
+function FilterSelect<T extends string>({
+  label,
+  value,
+  values,
+  onChange,
+  hideAllOption,
+  compact,
+}: {
+  label: string;
+  value: string;
+  values: readonly T[];
+  onChange: (value: string) => void;
+  hideAllOption?: boolean;
+  compact?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const options: string[] = hideAllOption ? [...values] : ["", ...values];
+  const allLabel = pluralizeAllLabel(label);
+  const currentLabel = value || allLabel;
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className={`flex h-9 items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-xs capitalize outline-none focus:ring-1 focus:ring-ring ${
+          compact ? "w-auto" : "w-full"
+        }`}
+      >
+        <span className="truncate">{currentLabel}</span>
+        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      </button>
+      <DialogPrimitive.Root open={open} onOpenChange={setOpen}>
+        <DialogPrimitive.Portal>
+          <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px]" />
+          <DialogPrimitive.Content
+            aria-describedby={undefined}
+            className="fixed bottom-0 left-1/2 z-50 w-full max-w-lg -translate-x-1/2 rounded-t-xl border border-b-0 border-border bg-background p-4 pb-[max(20px,env(safe-area-inset-bottom))] shadow-2xl"
+          >
+            <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-muted" />
+            <DialogPrimitive.Title className="px-1 text-base font-semibold tracking-tight">{label}</DialogPrimitive.Title>
+            <div className="mt-3 space-y-1 pb-1">
+              {options.map((item) => {
+                const itemLabel = item === "" ? allLabel : item;
+                const selected = item === value;
+                return (
+                  <button
+                    key={item || "__all"}
+                    type="button"
+                    onClick={() => {
+                      onChange(item);
+                      setOpen(false);
+                    }}
+                    className={`flex w-full items-center justify-between rounded-md px-3 py-2.5 text-left text-sm capitalize ${
+                      selected ? "bg-muted font-semibold text-foreground" : "text-foreground/80 hover:bg-muted/60"
+                    }`}
+                  >
+                    {itemLabel}
+                    {selected && <Check className="h-4 w-4" />}
+                  </button>
+                );
+              })}
+            </div>
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
+      </DialogPrimitive.Root>
+    </>
+  );
+}
 function ThreadRow({ thread, active, checked, onCheck, onOpen }: { thread: EmailThread; active: boolean; checked: boolean; onCheck: () => void; onOpen: () => void; }) {
   return (
     <div className={`group flex border-b border-border transition-colors last:border-b-0 ${active ? "bg-muted" : thread.hasUnread ? "bg-background hover:bg-muted/60" : "bg-muted/20 hover:bg-muted/60"}`}>

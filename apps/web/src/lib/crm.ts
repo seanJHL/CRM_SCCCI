@@ -70,6 +70,7 @@ export interface GmailMessage {
   snippet: string;
   labelIds: string[];
   bodyText: string;
+  bodyHtml: string | null;
   from: string;
   fromName: string;
   fromEmail: string;

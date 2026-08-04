@@ -63,8 +63,11 @@ self.addEventListener("fetch", (event) => {
   if (!url.protocol.startsWith("http")) return;
 
   // Never intercept local development. Vite module URLs are intentionally
-  // stable and must always come from the live development server.
-  if (url.hostname === "localhost" || url.hostname === "127.0.0.1") return;
+  // stable and must always come from the live development server — this
+  // also covers opening the dev server from a phone via a LAN IP or a
+  // .local mDNS hostname (how the mobile PWA is actually tested), not just
+  // literal "localhost" on the same machine.
+  if (/^(localhost|127(?:\.\d{1,3}){3}|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|[^.]+\.local)$/i.test(url.hostname)) return;
 
   // API calls: network-first, fall back to last-good cached response.
   if (url.pathname.startsWith("/api/")) {

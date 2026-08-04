@@ -78,6 +78,13 @@
       "when": 1785758400000,
       "tag": "0010_unify_crm_calendar",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1785820939196,
+      "tag": "0011_add_tasks",
+      "breakpoints": true
     }
   ]
 }

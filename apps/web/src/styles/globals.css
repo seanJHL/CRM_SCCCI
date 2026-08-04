@@ -28,6 +28,32 @@
     --radius: 0.5rem;
   }
 
+  /* Matches the mobile CRM's dark "Ember Mobile" palette (see mobile.css
+     `--m-*` tokens under `.m-controller-page`) so components shared between
+     the desktop and mobile CRM — e.g. ComposerDialog — can opt into the same
+     dark theme without duplicating every class in their markup. */
+  .dark {
+    --background: 205 18% 13%;
+    --foreground: 0 0% 98%;
+    --card: 206 14% 19%;
+    --card-foreground: 0 0% 98%;
+    --popover: 206 14% 19%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 84 100% 73%;
+    --primary-foreground: 207 18% 10%;
+    --secondary: 206 14% 23%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 206 14% 23%;
+    --muted-foreground: 0 0% 72%;
+    --accent: 205 14% 26%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 9 100% 69%;
+    --destructive-foreground: 207 18% 10%;
+    --border: 205 10% 30%;
+    --input: 205 10% 30%;
+    --ring: 84 100% 73%;
+  }
+
   * {
     border-color: hsl(var(--border));
   }

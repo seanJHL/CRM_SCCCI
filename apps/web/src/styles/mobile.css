@@ -1109,6 +1109,30 @@ body.ember-mobile-active {
   padding: 0 13px;
 }
 
+/* Native date/time inputs inside a field shell already have a custom
+   leading icon (e.g. CalendarDays/Clock3). The browser's own built-in
+   picker icon renders inline as part of the input's internal layout too,
+   and at the narrow widths these fields get on a phone (often half a row)
+   there isn't room for both — the native icon ends up overlapping the
+   value text. Make it invisible but keep it covering the full input so
+   tapping anywhere still opens the native picker. */
+.m-field-shell input[type="date"],
+.m-field-shell input[type="time"] {
+  position: relative;
+}
+
+.m-field-shell input[type="date"]::-webkit-calendar-picker-indicator,
+.m-field-shell input[type="time"]::-webkit-calendar-picker-indicator {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
 .m-exercise-search {
   min-height: 48px;
 }

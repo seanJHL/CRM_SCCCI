@@ -19,7 +19,11 @@ const DESKTOP_VIEW_KEY = "ember:desktop-view";
 const DEV_SERVICE_WORKER_RESET = `
 (() => {
   const hostname = window.location.hostname;
-  if (hostname !== "localhost" && hostname !== "127.0.0.1") return;
+  // Matches localhost, loopback, private LAN ranges (10.x, 172.16-31.x,
+  // 192.168.x) and .local mDNS hostnames — the ways a dev server gets
+  // opened from a phone for PWA testing, in addition to plain "localhost"
+  // on the same machine.
+  if (!/^(localhost|127(?:\\.\\d{1,3}){3}|10(?:\\.\\d{1,3}){3}|192\\.168(?:\\.\\d{1,3}){2}|172\\.(?:1[6-9]|2\\d|3[01])(?:\\.\\d{1,3}){2}|[^.]+\\.local)$/i.test(hostname)) return;
 
   const resetKey = "sccci:dev-service-worker-reset:v1";
   if (window.sessionStorage.getItem(resetKey) === "done") return;

@@ -10,15 +10,17 @@ import { format, startOfDay, endOfDay } from "date-fns";
 import {
   CalendarDays,
   Check,
+  ChevronDown,
   Circle,
   Dumbbell,
   Flame as FlameIcon,
   Plus,
   Radio,
+  Trash2,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import { queryKeys, type Event, type Habit, type HabitCompletion, type StreaksData } from "@/lib/query-keys";
-import { expandEvents, isOccurrenceComplete } from "@/lib/recurrence";
+import { queryKeys, type Event, type Habit, type HabitCompletion, type StreaksData, type Task } from "@/lib/query-keys";
+import { expandEvents, isOccurrenceComplete, type EventOccurrence } from "@/lib/recurrence";
 import { scheduleItemKind, SCHEDULE_ITEM_META } from "@/lib/event-meta";
 import { MobileErrorState } from "@/components/mobile/error-state";
 import { InstallPrompt } from "@/components/mobile/install-prompt";
@@ -29,6 +31,36 @@ import {
 export const Route = createFileRoute("/m/")({
   component: MobileHome,
 });
+
+type QueueItem =
+  | { kind: "event"; occurrence: EventOccurrence }
+  | { kind: "task"; task: Task };
+
+function isTaskComplete(task: Task) {
+  return task.items.length > 0 && task.items.every((item) => item.completed);
+}
+
+function isQueueItemComplete(item: QueueItem) {
+  return item.kind === "event" ? isOccurrenceComplete(item.occurrence) : isTaskComplete(item.task);
+}
+
+function queueItemStart(item: QueueItem): Date | null {
+  return item.kind === "event" ? item.occurrence.occurrenceStart : item.task.dueAt ? new Date(item.task.dueAt) : null;
+}
+
+function queueItemEnd(item: QueueItem): Date | null {
+  return item.kind === "event" ? item.occurrence.occurrenceEnd : item.task.dueAt ? new Date(item.task.dueAt) : null;
+}
+
+function queueItemTitle(item: QueueItem): string {
+  return item.kind === "event" ? item.occurrence.event.title : item.task.title;
+}
+
+function queueItemKey(item: QueueItem): string {
+  return item.kind === "event"
+    ? `event-${item.occurrence.event.id}-${item.occurrence.occurrenceStart.toISOString()}`
+    : `task-${item.task.id}`;
+}
 
 function useNow(intervalMs = 30_000) {
   const [now, setNow] = useState(() => new Date());
@@ -47,6 +79,7 @@ function MobileHome() {
   const dayEnd = endOfDay(now);
   const fromStr = format(dayStart, "yyyy-MM-dd");
   const toStr = format(dayEnd, "yyyy-MM-dd");
+  const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(new Set());
 
   const {
     data: events,
@@ -64,6 +97,24 @@ function MobileHome() {
     refetchOnWindowFocus: true,
     refetchInterval: 30_000,
   });
+
+  const {
+    data: tasksData,
+    isLoading: tasksLoading,
+    isError: tasksError,
+    refetch: refetchTasks,
+  } = useQuery({
+    queryKey: queryKeys.tasks.range(fromStr, toStr),
+    queryFn: () =>
+      api.get<Task[]>(
+        `/api/tasks?from=${dayStart.toISOString()}&to=${dayEnd.toISOString()}`,
+      ),
+    staleTime: 15_000,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+    refetchInterval: 30_000,
+  });
+  const tasksForToday = useMemo(() => tasksData ?? [], [tasksData]);
 
   const {
     data: habits,
@@ -97,21 +148,30 @@ function MobileHome() {
     () => expandEvents(events ?? [], dayStart, dayEnd),
     [events, dayStart.getTime(), dayEnd.getTime()],
   );
-  const missionOccurrences = useMemo(() => {
-    const incomplete = occurrences.filter(
-      (occurrence) => !isOccurrenceComplete(occurrence),
-    );
-    const active = incomplete.filter(
-      (occurrence) => occurrence.occurrenceEnd.getTime() >= now.getTime(),
-    );
+
+  const queueItems = useMemo<QueueItem[]>(
+    () => [
+      ...occurrences.map((occurrence): QueueItem => ({ kind: "event", occurrence })),
+      ...tasksForToday.map((task): QueueItem => ({ kind: "task", task })),
+    ],
+    [occurrences, tasksForToday],
+  );
+
+  const missionQueue = useMemo(() => {
+    const incomplete = queueItems.filter((item) => !isQueueItemComplete(item));
+    const active = incomplete.filter((item) => {
+      const end = queueItemEnd(item);
+      return !end || end.getTime() >= now.getTime();
+    });
     const overdue = incomplete
-      .filter((occurrence) => occurrence.occurrenceEnd.getTime() < now.getTime())
+      .filter((item) => {
+        const end = queueItemEnd(item);
+        return !!end && end.getTime() < now.getTime();
+      })
       .reverse();
-    const completed = occurrences
-      .filter(isOccurrenceComplete)
-      .reverse();
+    const completed = queueItems.filter(isQueueItemComplete).reverse();
     return [...active, ...overdue, ...completed];
-  }, [occurrences, now.getTime()]);
+  }, [queueItems, now.getTime()]);
 
   const toggleCompletionMutation = useMutation({
     mutationFn: ({ eventId, occurrenceStart }: { eventId: string; occurrenceStart: string }) =>
@@ -123,29 +183,54 @@ function MobileHome() {
     },
   });
 
+  const toggleTaskItemMutation = useMutation({
+    mutationFn: ({ taskId, itemId }: { taskId: string; itemId: string }) =>
+      api.post(`/api/tasks/${taskId}/items/${itemId}/toggle`, {}),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["tasks"] });
+    },
+  });
+
+  const deleteTaskMutation = useMutation({
+    mutationFn: (taskId: string) => api.delete(`/api/tasks/${taskId}`),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["tasks"] });
+    },
+  });
+
+  const toggleTaskExpanded = (taskId: string) => {
+    setExpandedTaskIds((current) => {
+      const next = new Set(current);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  };
+
   const habitsDone = completionQueries.filter((q) => (q.data ?? []).length > 0).length;
   const habitsTotal = habits?.length ?? 0;
-  const eventsDone = occurrences.filter(isOccurrenceComplete).length;
-  const eventsTotal = occurrences.length;
-  const nextOccurrence = missionOccurrences.find(
-    (occurrence) => !isOccurrenceComplete(occurrence),
-  );
-  const nextMissionStatus = nextOccurrence
-    ? nextOccurrence.occurrenceStart.getTime() > now.getTime()
-      ? `${format(nextOccurrence.occurrenceStart, "HH:mm")} · T−${Math.max(
-          0,
-          Math.round(
-            (nextOccurrence.occurrenceStart.getTime() - now.getTime()) / 60_000,
-          ),
-        )} MIN`
-      : nextOccurrence.occurrenceEnd.getTime() >= now.getTime()
-        ? `IN PROGRESS · UNTIL ${format(nextOccurrence.occurrenceEnd, "HH:mm")}`
-        : `OVERDUE · ENDED ${format(nextOccurrence.occurrenceEnd, "HH:mm")}`
-    : "READY FOR INPUT";
-  const totalItems = habitsTotal + eventsTotal;
-  const doneItems = habitsDone + eventsDone;
+  const agendaDone = queueItems.filter(isQueueItemComplete).length;
+  const agendaTotal = queueItems.length;
+  const agendaLoading = eventsLoading || tasksLoading;
+  const nextItem = missionQueue.find((item) => !isQueueItemComplete(item));
+  const nextStart = nextItem ? queueItemStart(nextItem) : null;
+  const nextEnd = nextItem ? queueItemEnd(nextItem) : null;
+  const nextMissionStatus = !nextItem
+    ? "READY FOR INPUT"
+    : !nextStart
+      ? "OPEN · NO DUE DATE"
+      : nextStart.getTime() > now.getTime()
+        ? `${format(nextStart, "HH:mm")} · T−${Math.max(
+            0,
+            Math.round((nextStart.getTime() - now.getTime()) / 60_000),
+          )} MIN`
+        : nextItem.kind === "event" && nextEnd && nextEnd.getTime() >= now.getTime()
+          ? `IN PROGRESS · UNTIL ${format(nextEnd, "HH:mm")}`
+          : `OVERDUE · ${nextItem.kind === "event" ? "ENDED" : "DUE"} ${format(nextEnd ?? nextStart, "HH:mm")}`;
+  const totalItems = habitsTotal + agendaTotal;
+  const doneItems = habitsDone + agendaDone;
   const progress = totalItems > 0 ? doneItems / totalItems : 0;
-  const dataLoading = eventsLoading || habitsLoading;
+  const dataLoading = agendaLoading || habitsLoading;
 
   const bestHabitStreak = useMemo(
     () => (streaks?.habitStreaks ?? []).reduce((max, h) => Math.max(max, h.streakCount), 0),
@@ -213,9 +298,9 @@ function MobileHome() {
                 Next mission
               </p>
               <p className="m-remote-display-title mt-1.5 truncate text-[25px] font-semibold leading-tight tracking-[-0.04em] text-black">
-                {eventsLoading
+                {agendaLoading
                   ? "Scanning schedule…"
-                  : nextOccurrence?.event.title ?? "Channel clear"}
+                  : nextItem ? queueItemTitle(nextItem) : "Channel clear"}
               </p>
               <p className="mt-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-black/55">
                 {nextMissionStatus}
@@ -234,11 +319,11 @@ function MobileHome() {
           <div className="mt-4 space-y-2">
             <div className="flex items-center justify-between font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-black/45">
               <span>Mission queue</span>
-              <span>{eventsTotal.toString().padStart(2, "0")} items</span>
+              <span>{agendaTotal.toString().padStart(2, "0")} items</span>
             </div>
-            {eventsLoading ? (
+            {agendaLoading ? (
               <p className="py-3 font-mono text-[11px] text-black/55">Receiving calendar data…</p>
-            ) : occurrences.length === 0 ? (
+            ) : queueItems.length === 0 ? (
               <button
                 type="button"
                 onClick={() => openQuickCapture({ kind: "event" })}
@@ -249,42 +334,111 @@ function MobileHome() {
               </button>
             ) : (
               <div className="max-h-[168px] space-y-2 overflow-y-auto pr-1">
-                {missionOccurrences.map((occurrence) => {
-                  const kind = scheduleItemKind(occurrence.event);
-                  const completed = isOccurrenceComplete(occurrence);
+                {missionQueue.map((item) => {
+                  if (item.kind === "event") {
+                    const { occurrence } = item;
+                    const kind = scheduleItemKind(occurrence.event);
+                    const completed = isOccurrenceComplete(occurrence);
+                    return (
+                      <div
+                        key={queueItemKey(item)}
+                        className={`flex min-h-8 items-center gap-2 border-t border-black/10 pt-1.5 font-mono ${completed ? "opacity-50" : ""}`}
+                      >
+                        <span className="w-12 shrink-0 text-[10px] font-bold tabular-nums text-black/55">
+                          {occurrence.event.isAllDay ? "ALL" : format(occurrence.occurrenceStart, "HH:mm")}
+                        </span>
+                        <span className={`min-w-0 flex-1 truncate text-[11px] font-semibold text-black/80 ${completed ? "line-through" : ""}`}>
+                          {occurrence.event.title}
+                        </span>
+                        <span className="text-[8px] font-black tracking-[0.08em] text-black/45">
+                          {SCHEDULE_ITEM_META[kind].shortLabel}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            toggleCompletionMutation.mutate({
+                              eventId: occurrence.event.id,
+                              occurrenceStart: occurrence.occurrenceStart.toISOString(),
+                            })
+                          }
+                          disabled={toggleCompletionMutation.isPending}
+                          aria-label={`Mark ${occurrence.event.title} ${completed ? "not done" : "done"}`}
+                          aria-pressed={completed}
+                          className="m-press flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-black/20 text-black/65 disabled:opacity-40"
+                        >
+                          {completed ? (
+                            <Check width={13} height={13} strokeWidth={3} />
+                          ) : (
+                            <Circle width={13} height={13} strokeWidth={2} />
+                          )}
+                        </button>
+                      </div>
+                    );
+                  }
+
+                  const { task } = item;
+                  const completed = isTaskComplete(task);
+                  const doneCount = task.items.filter((i) => i.completed).length;
+                  const expanded = expandedTaskIds.has(task.id);
                   return (
-                    <div
-                      key={`${occurrence.event.id}-${occurrence.occurrenceStart.toISOString()}`}
-                      className={`flex min-h-8 items-center gap-2 border-t border-black/10 pt-1.5 font-mono ${completed ? "opacity-50" : ""}`}
-                    >
-                      <span className="w-12 shrink-0 text-[10px] font-bold tabular-nums text-black/55">
-                        {occurrence.event.isAllDay ? "ALL" : format(occurrence.occurrenceStart, "HH:mm")}
-                      </span>
-                      <span className={`min-w-0 flex-1 truncate text-[11px] font-semibold text-black/80 ${completed ? "line-through" : ""}`}>
-                        {occurrence.event.title}
-                      </span>
-                      <span className="text-[8px] font-black tracking-[0.08em] text-black/45">
-                        {SCHEDULE_ITEM_META[kind].shortLabel}
-                      </span>
+                    <div key={queueItemKey(item)} className={`border-t border-black/10 pt-1.5 font-mono ${completed ? "opacity-50" : ""}`}>
                       <button
                         type="button"
-                        onClick={() =>
-                          toggleCompletionMutation.mutate({
-                            eventId: occurrence.event.id,
-                            occurrenceStart: occurrence.occurrenceStart.toISOString(),
-                          })
-                        }
-                        disabled={toggleCompletionMutation.isPending}
-                        aria-label={`Mark ${occurrence.event.title} ${completed ? "not done" : "done"}`}
-                        aria-pressed={completed}
-                        className="m-press flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-black/20 text-black/65 disabled:opacity-40"
+                        onClick={() => toggleTaskExpanded(task.id)}
+                        aria-expanded={expanded}
+                        className="flex min-h-8 w-full items-center gap-2 text-left"
                       >
-                        {completed ? (
-                          <Check width={13} height={13} strokeWidth={3} />
-                        ) : (
-                          <Circle width={13} height={13} strokeWidth={2} />
-                        )}
+                        <span className="w-12 shrink-0 text-[10px] font-bold tabular-nums text-black/55">
+                          {task.dueAt ? format(new Date(task.dueAt), "HH:mm") : "—"}
+                        </span>
+                        <span className={`min-w-0 flex-1 truncate text-[11px] font-semibold text-black/80 ${completed ? "line-through" : ""}`}>
+                          {task.title}
+                        </span>
+                        <span className="shrink-0 text-[9px] font-bold tabular-nums text-black/55">
+                          {doneCount}/{task.items.length}
+                        </span>
+                        <span className="text-[8px] font-black tracking-[0.08em] text-black/45">
+                          {SCHEDULE_ITEM_META.task.shortLabel}
+                        </span>
+                        <ChevronDown
+                          width={13}
+                          height={13}
+                          className={`shrink-0 text-black/45 transition-transform ${expanded ? "rotate-180" : ""}`}
+                        />
                       </button>
+                      {expanded && (
+                        <div className="ml-12 mb-1.5 space-y-1 border-l border-black/10 pl-3">
+                          {task.items.map((taskItem) => (
+                            <button
+                              key={taskItem.id}
+                              type="button"
+                              onClick={() =>
+                                toggleTaskItemMutation.mutate({ taskId: task.id, itemId: taskItem.id })
+                              }
+                              disabled={toggleTaskItemMutation.isPending}
+                              aria-pressed={taskItem.completed}
+                              className="flex w-full items-center gap-1.5 py-0.5 text-left disabled:opacity-40"
+                            >
+                              {taskItem.completed ? (
+                                <Check width={11} height={11} strokeWidth={3} className="shrink-0 text-black/60" />
+                              ) : (
+                                <Circle width={11} height={11} strokeWidth={2} className="shrink-0 text-black/40" />
+                              )}
+                              <span className={`min-w-0 flex-1 truncate text-[10.5px] text-black/70 ${taskItem.completed ? "line-through opacity-60" : ""}`}>
+                                {taskItem.label}
+                              </span>
+                            </button>
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() => deleteTaskMutation.mutate(task.id)}
+                            disabled={deleteTaskMutation.isPending}
+                            className="mt-1 flex items-center gap-1 text-[9px] font-bold uppercase tracking-[0.06em] text-black/40 disabled:opacity-40"
+                          >
+                            <Trash2 width={10} height={10} /> Delete task
+                          </button>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -299,7 +453,7 @@ function MobileHome() {
             />
             <RemoteStat
               label="Agenda"
-              value={eventsLoading ? "—" : `${eventsDone}/${eventsTotal}`}
+              value={agendaLoading ? "—" : `${agendaDone}/${agendaTotal}`}
             />
             <RemoteStat
               label="Streak"
@@ -330,7 +484,7 @@ function MobileHome() {
           <ControlButton
             icon={Check}
             label="Task"
-            hint="Capture it"
+            hint="Make a checklist"
             onClick={() => openQuickCapture({ kind: "task" })}
           />
           <ControlButton
@@ -353,12 +507,12 @@ function MobileHome() {
         </div>
       </section>
 
-      {(eventsError || habitsError) && (
+      {(eventsError || habitsError || tasksError) && (
         <MobileErrorState
           title="Your day is out of reach"
           message="We couldn’t refresh your calendar data."
           onRetry={() => {
-            void Promise.all([refetchEvents(), refetchHabits()]);
+            void Promise.all([refetchEvents(), refetchHabits(), refetchTasks()]);
           }}
         />
       )}

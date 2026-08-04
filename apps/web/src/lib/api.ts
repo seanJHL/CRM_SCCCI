@@ -119,6 +119,13 @@ export class ApiClientError extends Error {
   }
 }
 
+/**
+ * Server-authoritative paths with no offline story and no matching case in
+ * localFallback — their failures must propagate untouched so a real error
+ * (e.g. GOOGLE_REAUTH_REQUIRED) never gets masked by the fallback detour.
+ */
+const SERVER_ONLY_PREFIXES = ["/api/gmail", "/api/calendar-crm", "/api/privacy", "/api/auth"];
+
 async function request<T>(
   path: string,
   options?: RequestInit,
@@ -151,6 +158,9 @@ async function request<T>(
     }
     return body.data;
   } catch (error) {
+    if (SERVER_ONLY_PREFIXES.some((prefix) => path.startsWith(prefix))) {
+      throw error;
+    }
     const localResult = await localFallback(path, options);
     if (localResult.handled) return localResult.data as T;
     throw error;
