@@ -31,6 +31,9 @@
     },
     "production": {
       "name": "ember-api",
+      "routes": [
+        { "pattern": "api.seanleejh.com", "custom_domain": true }
+      ],
       "observability": {
         "enabled": true,
         "head_sampling_rate": 0.1
@@ -38,7 +41,7 @@
       "vars": {
         "ENVIRONMENT": "production",
         "CORS_ORIGIN": "https://crm.seanleejh.com,https://ember-mobile-controller.sean-lee-jh.chatgpt.site",
-        "GOOGLE_REDIRECT_URI": "https://ember-api.sean-1df.workers.dev/api/auth/google/callback"
+        "GOOGLE_REDIRECT_URI": "https://api.seanleejh.com/api/auth/google/callback"
       }
     }
   }
