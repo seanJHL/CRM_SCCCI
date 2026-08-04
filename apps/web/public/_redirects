@@ -1,3 +1,11 @@
 # Cloudflare Pages redirect rules
+# Static assets and public files must resolve to themselves so hashed JS/CSS
+# bundles and icons are served as-is, not rewritten to the SPA shell.
+/assets/*    /assets/:splat    200
+/icons/*    /icons/:splat    200
+/manifest.webmanifest    /manifest.webmanifest    200
+/og.png    /og.png    200
+/sw.js    /sw.js    200
+
 # Fallback to TanStack Start's generated SPA shell for client-side routing.
 /*    /_shell   200
