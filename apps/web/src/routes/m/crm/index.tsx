@@ -511,7 +511,9 @@ function Stat({
       aria-pressed={active}
       onClick={onClick}
       className="m-press w-full min-w-0 px-2 py-3 text-center transition-colors"
-      style={{ backgroundColor: active ? `${color ?? "var(--m-primary)"}1f` : undefined }}
+      style={{
+        backgroundColor: active ? `color-mix(in srgb, ${color ?? "var(--m-primary)"} 12%, transparent)` : undefined,
+      }}
     >
       <p
         className="font-mono text-[18px] font-black tabular-nums"
