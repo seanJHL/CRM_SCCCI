@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 import {
   useMutation,
   useQueries,
@@ -38,6 +38,7 @@ import {
   Zap,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { loadSession, type SessionData } from "@/lib/crm";
 import {
   queryKeys,
   type Event,
@@ -57,6 +58,18 @@ import { useAppPreferences } from "@/lib/preferences";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/")({
+  beforeLoad: async () => {
+    let session: SessionData;
+    try {
+      session = await loadSession();
+    } catch {
+      throw redirect({ to: "/login", search: { error: undefined } });
+    }
+    if (!session.google.connected) {
+      throw redirect({ to: "/login", search: { error: undefined } });
+    }
+    return { session };
+  },
   component: CalendarHomePage,
 });
 
