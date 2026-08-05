@@ -15,9 +15,14 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, ApiClientError } from "@/lib/api";
-import { queryKeys, type Event, type Exercise, type Task } from "@/lib/query-keys";
-import { EQUIPMENT_OPTIONS, EXERCISE_CATEGORIES } from "@/lib/exercise-data";
+import { api } from "@/lib/api";
+import {
+  queryKeys,
+  type Event,
+  type GroupExercise,
+  type Task,
+  type WorkoutGroup,
+} from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
 import { notify } from "@/components/mobile/notification-banner";
 
@@ -81,18 +86,6 @@ function recurrenceExpiry(date: string) {
   return format(addDays(new Date(`${date}T12:00:00`), 30), "yyyy-MM-dd");
 }
 
-/**
- * The library is shared, so a name that already exists is not a failure —
- * the 409 carries the existing row so the activity can reuse it.
- */
-function existingExerciseFromError(error: unknown): Exercise | null {
-  if (!(error instanceof ApiClientError) || error.code !== "EXERCISE_EXISTS") {
-    return null;
-  }
-  const details = error.details as { exercise?: Exercise } | undefined;
-  return details?.exercise ?? null;
-}
-
 function defaultSchedule() {
   const date = new Date();
   const minutes = date.getMinutes();
@@ -120,14 +113,9 @@ export function QuickActionSheet({
     recurrenceExpiry(defaultSchedule().date),
   );
 
-  // Activity: pick an exercise from the library — or name a new one — and put
-  // it on the calendar at the chosen time.
-  const [activityExerciseId, setActivityExerciseId] = useState<string | null>(
-    null,
-  );
-  const [exerciseTrackingType, setExerciseTrackingType] = useState<"strength" | "run">("strength");
-  const [exerciseCategory, setExerciseCategory] = useState("functional");
-  const [exerciseEquipment, setExerciseEquipment] = useState("other");
+  // Activity: pick a workout group from the Train tab and put it on the
+  // calendar at the chosen time.
+  const [activityGroupId, setActivityGroupId] = useState<string | null>(null);
 
   // Task: an optional due date plus a checklist of bullet items.
   const [hasDueDate, setHasDueDate] = useState(true);
@@ -153,48 +141,26 @@ export function QuickActionSheet({
     },
   });
 
-  const { data: exerciseLibrary } = useQuery({
-    queryKey: queryKeys.exercises.all,
-    queryFn: () => api.get<Exercise[]>("/api/exercises"),
+  const { data: workoutGroups } = useQuery({
+    queryKey: queryKeys.workoutGroups.all,
+    queryFn: () => api.get<WorkoutGroup[]>("/api/workouts/groups"),
     staleTime: 300_000,
     enabled: open,
   });
 
   const createActivityMutation = useMutation({
     mutationFn: async (input: {
-      exerciseId: string | null;
+      groupId: string;
       name: string;
-      trackingType: "strength" | "run";
-      category: string;
-      equipmentType: string;
       startAt: string;
       endAt: string;
     }) => {
-      let exerciseId = input.exerciseId;
-      let exerciseName = input.name;
-      let addedToLibrary = false;
-
-      if (!exerciseId) {
-        try {
-          const exercise = await api.post<Exercise>("/api/exercises", {
-            name: input.name,
-            trackingType: input.trackingType,
-            category: input.category,
-            equipmentType: input.equipmentType,
-          });
-          exerciseId = exercise.id;
-          exerciseName = exercise.name;
-          addedToLibrary = true;
-        } catch (error) {
-          const existing = existingExerciseFromError(error);
-          if (!existing) throw error;
-          exerciseId = existing.id;
-          exerciseName = existing.name;
-        }
-      }
+      const group = await api.get<WorkoutGroup & { exercises: GroupExercise[] }>(
+        `/api/workouts/groups/${input.groupId}`,
+      );
 
       await api.post<Event>("/api/events", {
-        title: exerciseName,
+        title: input.name,
         startAt: input.startAt,
         endAt: input.endAt,
         category: "personal",
@@ -203,21 +169,21 @@ export function QuickActionSheet({
         tags: "activity",
         recurrenceRule: "",
         recurrenceExpiryAt: "",
-        exercises: [{ exerciseId }],
+        exercises: group.exercises.map((exercise) => ({
+          exerciseId: exercise.exerciseId,
+          sets: exercise.defaultSets,
+          reps: exercise.defaultReps,
+          weight: exercise.defaultWeight,
+        })),
       });
 
-      return { exerciseName, addedToLibrary };
+      return { groupName: group.name };
     },
-    onSuccess: async ({ exerciseName, addedToLibrary }) => {
-      if (addedToLibrary) {
-        await queryClient.invalidateQueries({
-          queryKey: queryKeys.exercises.all,
-        });
-      }
+    onSuccess: async ({ groupName }) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.events.all });
       notify({
         title: "Activity scheduled",
-        body: `${exerciseName} is on your calendar.`,
+        body: `${groupName} is on your calendar.`,
       });
       onClose();
     },
@@ -247,26 +213,12 @@ export function QuickActionSheet({
 
   const activityQuery = title.trim().toLowerCase();
   const activityMatches = useMemo(() => {
-    const library = exerciseLibrary ?? [];
-    if (!activityQuery) return library.slice(0, 6);
-    return library
-      .filter(
-        (exercise) =>
-          exercise.name.toLowerCase().includes(activityQuery) ||
-          exercise.category.toLowerCase().includes(activityQuery),
-      )
+    const groups = workoutGroups ?? [];
+    if (!activityQuery) return groups.slice(0, 6);
+    return groups
+      .filter((group) => group.name.toLowerCase().includes(activityQuery))
       .slice(0, 6);
-  }, [exerciseLibrary, activityQuery]);
-  const activityExactMatch = useMemo(
-    () =>
-      (exerciseLibrary ?? []).find(
-        (exercise) => exercise.name.toLowerCase() === activityQuery,
-      ) ?? null,
-    [exerciseLibrary, activityQuery],
-  );
-  // Only a brand-new name needs the category/equipment fields; picking an
-  // existing exercise carries its own.
-  const activityIsNew = !activityExerciseId && !activityExactMatch;
+  }, [workoutGroups, activityQuery]);
 
   useEffect(() => {
     if (!open) return;
@@ -282,23 +234,20 @@ export function QuickActionSheet({
     setRecurrenceExpiryAt(
       recurrenceExpiry(request?.date ?? nextSchedule.date),
     );
-    setActivityExerciseId(null);
-    setExerciseTrackingType("strength");
-    setExerciseCategory("functional");
-    setExerciseEquipment("other");
+    setActivityGroupId(null);
     setHasDueDate(true);
     setChecklistItems([""]);
   }, [open, request]);
 
   const selectKind = (nextKind: CaptureKind) => {
     resetAllMutations();
-    setActivityExerciseId(null);
+    setActivityGroupId(null);
     setKind(nextKind);
   };
 
-  const selectActivityExercise = (exercise: Exercise) => {
-    setActivityExerciseId(exercise.id);
-    setTitle(exercise.name);
+  const selectActivityGroup = (group: WorkoutGroup) => {
+    setActivityGroupId(group.id);
+    setTitle(group.name);
   };
 
   const scheduleShortcut = (shortcut: "now" | "later" | "tomorrow") => {
@@ -325,14 +274,6 @@ export function QuickActionSheet({
     }
   };
 
-  const switchTrackingType = (value: "strength" | "run") => {
-    setExerciseTrackingType(value);
-    if (value === "run") {
-      setExerciseCategory("cardio");
-      setExerciseEquipment("outdoor");
-    }
-  };
-
   const updateChecklistItem = (index: number, value: string) => {
     setChecklistItems((current) => current.map((item, i) => (i === index ? value : item)));
   };
@@ -350,21 +291,20 @@ export function QuickActionSheet({
     Boolean(title.trim()) &&
     !activeMutation.isPending &&
     !recurrenceError &&
-    (kind !== "task" || hasChecklistContent);
+    (kind !== "task" || hasChecklistContent) &&
+    (kind !== "activity" || Boolean(activityGroupId));
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     if (!canSubmit) return;
 
     if (kind === "activity") {
+      if (!activityGroupId) return;
       const start = new Date(`${date}T${time}:00`);
       if (Number.isNaN(start.getTime())) return;
       createActivityMutation.mutate({
-        exerciseId: activityExerciseId ?? activityExactMatch?.id ?? null,
+        groupId: activityGroupId,
         name: title.trim(),
-        trackingType: exerciseTrackingType,
-        category: exerciseCategory,
-        equipmentType: exerciseEquipment,
         startAt: start.toISOString(),
         endAt: new Date(start.getTime() + duration * 60_000).toISOString(),
       });
@@ -495,7 +435,7 @@ export function QuickActionSheet({
                 className="mb-1.5 block text-[12px] font-semibold text-[var(--m-text)]"
               >
                 {kind === "activity"
-                  ? "Search your exercises"
+                  ? "Search your workout groups"
                   : "What’s happening?"}
               </label>
               <span className="relative block">
@@ -505,7 +445,7 @@ export function QuickActionSheet({
                   value={title}
                   onChange={(event) => {
                     setTitle(event.target.value);
-                    setActivityExerciseId(null);
+                    setActivityGroupId(null);
                   }}
                   placeholder={activeType.placeholder}
                   autoComplete="off"
@@ -523,153 +463,53 @@ export function QuickActionSheet({
             </div>
 
             {kind === "activity" && (
-              <>
-                <div
-                  className="mt-2 overflow-hidden rounded-2xl border border-[var(--m-border)] bg-[var(--m-surface-2)]"
-                  role="listbox"
-                  aria-label="Your exercises"
-                >
-                  {activityMatches.length === 0 && !title.trim() && (
-                    <p className="px-3 py-3 text-[12px] text-[var(--m-text-3)]">
-                      Your library is empty — type a name to create your first
-                      exercise.
-                    </p>
-                  )}
-                  {activityMatches.map((exercise) => {
-                    const selected =
-                      exercise.id === (activityExerciseId ?? activityExactMatch?.id);
-                    return (
-                      <button
-                        key={exercise.id}
-                        type="button"
-                        role="option"
-                        aria-selected={selected}
-                        onClick={() => selectActivityExercise(exercise)}
-                        className={cn(
-                          "m-press flex min-h-11 w-full items-center gap-2 border-b border-[var(--m-border)] px-3 py-2 text-left last:border-b-0",
-                          selected && "bg-[var(--m-primary)]/12",
-                        )}
-                      >
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[13px] font-semibold text-[var(--m-text)]">
-                            {exercise.name}
-                          </span>
-                          <span className="block truncate text-[10px] text-[var(--m-text-3)]">
-                            {EXERCISE_CATEGORIES[
-                              exercise.category as keyof typeof EXERCISE_CATEGORIES
-                            ]?.label ?? exercise.category}
-                            {" · "}
-                            {exercise.trackingType === "run"
-                              ? "Distance & time"
-                              : "Sets & weight"}
-                          </span>
+              <div
+                className="mt-2 overflow-hidden rounded-2xl border border-[var(--m-border)] bg-[var(--m-surface-2)]"
+                role="listbox"
+                aria-label="Your workout groups"
+              >
+                {activityMatches.length === 0 && (
+                  <p className="px-3 py-3 text-[12px] text-[var(--m-text-3)]">
+                    {title.trim()
+                      ? "No workout groups match that name."
+                      : "No workout groups yet — build one in the Train tab first."}
+                  </p>
+                )}
+                {activityMatches.map((group) => {
+                  const selected = group.id === activityGroupId;
+                  return (
+                    <button
+                      key={group.id}
+                      type="button"
+                      role="option"
+                      aria-selected={selected}
+                      onClick={() => selectActivityGroup(group)}
+                      className={cn(
+                        "m-press flex min-h-11 w-full items-center gap-2 border-b border-[var(--m-border)] px-3 py-2 text-left last:border-b-0",
+                        selected && "bg-[var(--m-primary)]/12",
+                      )}
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13px] font-semibold text-[var(--m-text)]">
+                          {group.name}
                         </span>
-                        {selected && (
-                          <Check
-                            width={15}
-                            height={15}
-                            strokeWidth={3}
-                            aria-hidden="true"
-                            className="shrink-0 text-[var(--m-text)]"
-                          />
-                        )}
-                      </button>
-                    );
-                  })}
-                  {activityIsNew && title.trim() && (
-                    <p className="border-t border-[var(--m-border)] px-3 py-2.5 text-[12px] font-semibold text-[var(--m-text-2)]">
-                      <Plus
-                        width={13}
-                        height={13}
-                        aria-hidden="true"
-                        className="mr-1 inline"
-                      />
-                      “{title.trim()}” will be added to your library
-                    </p>
-                  )}
-                </div>
-              </>
-            )}
-
-            {kind === "activity" && activityIsNew && title.trim() && (
-              <>
-                <fieldset className="mt-4">
-                  <legend className="mb-1.5 text-[12px] font-semibold text-[var(--m-text)]">
-                    Track by
-                  </legend>
-                  <div className="grid grid-cols-2 rounded-xl bg-[var(--m-surface-2)] p-1">
-                    {(["strength", "run"] as const).map((value) => (
-                      <button
-                        type="button"
-                        key={value}
-                        onClick={() => switchTrackingType(value)}
-                        className={cn(
-                          "m-press min-h-11 rounded-[10px] text-[12px] font-semibold",
-                          exerciseTrackingType === value
-                            ? "bg-[var(--m-primary)] text-[var(--m-primary-fg)]"
-                            : "text-[var(--m-text-2)]",
-                        )}
-                        aria-pressed={exerciseTrackingType === value}
-                      >
-                        {value === "strength" ? "Sets & weight" : "Distance & time"}
-                      </button>
-                    ))}
-                  </div>
-                </fieldset>
-
-                <div className="mt-3 grid grid-cols-2 gap-2.5">
-                  <label className="min-w-0 block">
-                    <span className="mb-1.5 block text-[10px] font-semibold text-[var(--m-text-2)]">
-                      Category
-                    </span>
-                    <span className="relative block">
-                      <select
-                        value={exerciseCategory}
-                        onChange={(event) => setExerciseCategory(event.target.value)}
-                        className="m-field w-full appearance-none pr-9 text-[13px]"
-                      >
-                        {Object.entries(EXERCISE_CATEGORIES)
-                          .sort(([, a], [, b]) => a.order - b.order)
-                          .map(([value, meta]) => (
-                            <option key={value} value={value}>
-                              {meta.label}
-                            </option>
-                          ))}
-                      </select>
-                      <ChevronDown
-                        width={15}
-                        height={15}
-                        aria-hidden="true"
-                        className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[var(--m-text-3)]"
-                      />
-                    </span>
-                  </label>
-                  <label className="min-w-0 block">
-                    <span className="mb-1.5 block text-[10px] font-semibold text-[var(--m-text-2)]">
-                      Equipment
-                    </span>
-                    <span className="relative block">
-                      <select
-                        value={exerciseEquipment}
-                        onChange={(event) => setExerciseEquipment(event.target.value)}
-                        className="m-field w-full appearance-none pr-9 text-[13px]"
-                      >
-                        {EQUIPMENT_OPTIONS.map(([value, label]) => (
-                          <option key={value} value={value}>
-                            {label}
-                          </option>
-                        ))}
-                      </select>
-                      <ChevronDown
-                        width={15}
-                        height={15}
-                        aria-hidden="true"
-                        className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[var(--m-text-3)]"
-                      />
-                    </span>
-                  </label>
-                </div>
-              </>
+                        <span className="block truncate text-[10px] text-[var(--m-text-3)]">
+                          {group.targetDays || "Workout group"}
+                        </span>
+                      </span>
+                      {selected && (
+                        <Check
+                          width={15}
+                          height={15}
+                          strokeWidth={3}
+                          aria-hidden="true"
+                          className="shrink-0 text-[var(--m-text)]"
+                        />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
             )}
 
             {kind === "task" && (

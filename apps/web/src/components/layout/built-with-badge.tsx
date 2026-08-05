@@ -9,7 +9,7 @@ export function BuiltWithBadge() {
   return (
     <Badge
       variant="outline"
-      className="fixed bottom-2 right-2 z-50 bg-background/80 backdrop-blur-sm shadow-sm pointer-events-none select-none"
+      className="fixed bottom-4 right-4 z-50 border-primary/40 bg-primary text-primary-foreground px-3 py-1.5 text-sm font-semibold shadow-lg pointer-events-none select-none"
     >
       Built with Qwen Qoder
     </Badge>
