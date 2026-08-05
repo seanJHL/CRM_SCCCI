@@ -3,6 +3,7 @@
 # bundles and icons are served as-is, not rewritten to the SPA shell.
 /assets/*    /assets/:splat    200
 /icons/*    /icons/:splat    200
+/Images/*    /Images/:splat    200
 /manifest.webmanifest    /manifest.webmanifest    200
 /og.png    /og.png    200
 /sw.js    /sw.js    200
