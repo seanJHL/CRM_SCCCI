@@ -159,7 +159,7 @@ export function QuickActionSheet({
     mutationFn: (payload: Record<string, unknown>) =>
       api.post<Task>("/api/tasks", payload),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
       notify({
         title: "Task added",
         body: `${title.trim()} is on your board.`,

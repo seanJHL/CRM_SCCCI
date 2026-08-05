@@ -46,13 +46,20 @@ import {
   type HabitCompletion,
   type Reminder,
   type StreaksData,
+  type Task,
 } from "@/lib/query-keys";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   EventDialog,
   type EventPayload,
 } from "@/components/calendar/event-dialog";
-import { collectTags, eventPalette, parseTags } from "@/lib/event-meta";
+import {
+  collectTags,
+  eventPalette,
+  paletteById,
+  parseTags,
+} from "@/lib/event-meta";
+import { completedItemCount, isTaskComplete, tasksDueOn } from "@/lib/tasks";
 import { expandEvents } from "@/lib/recurrence";
 import { useAppPreferences } from "@/lib/preferences";
 import { cn } from "@/lib/utils";
@@ -146,6 +153,20 @@ function CalendarHomePage() {
     refetchOnWindowFocus: true,
   });
 
+  // Tasks are a separate entity from events, so the calendar has to ask for
+  // them explicitly or dated tasks never land on the day they are due.
+  const { data: tasks } = useQuery({
+    queryKey: queryKeys.tasks.range(fromStr, toStr),
+    queryFn: () =>
+      api.get<Task[]>(
+        `/api/tasks?from=${eventRangeStart.toISOString()}&to=${eventRangeEnd.toISOString()}`,
+      ),
+    staleTime: 60_000,
+    gcTime: 600_000,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+  });
+
   const { data: habits, isLoading: habitsLoading } = useQuery({
     queryKey: queryKeys.habits.all,
     queryFn: () => api.get<Habit[]>("/api/habits"),
@@ -227,6 +248,13 @@ function CalendarHomePage() {
     onSettled: invalidateEvents,
   });
 
+  const toggleTaskItemMutation = useMutation({
+    mutationFn: ({ taskId, itemId }: { taskId: string; itemId: string }) =>
+      api.post(`/api/tasks/${taskId}/items/${itemId}/toggle`, {}),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all }),
+  });
+
   function openCreateDialog(day: Date) {
     setEditingEvent(null);
     setDialogDate(day);
@@ -260,14 +288,12 @@ function CalendarHomePage() {
   );
   const habitsDone = selectedCompletedHabitIds.size;
   const activeReminders = reminders?.filter((reminder) => reminder.isActive) ?? [];
+  // Expand across the full visible span. Using the last day's midnight as the
+  // range end would drop every event later that day — which in day view is
+  // every event on screen.
   const expandedOccurrences = useMemo(
-    () =>
-      expandEvents(
-        events ?? [],
-        calendarDays[0],
-        calendarDays[calendarDays.length - 1],
-      ),
-    [events, calendarDays],
+    () => expandEvents(events ?? [], eventRangeStart, eventRangeEnd),
+    [events, eventRangeStart.getTime(), eventRangeEnd.getTime()],
   );
   const selectedDayOccurrences = useMemo(
     () =>
@@ -276,6 +302,13 @@ function CalendarHomePage() {
       ),
     [expandedOccurrences, selectedDate],
   );
+  const selectedDayTasks = useMemo(
+    () => tasksDueOn(tasks, selectedDate),
+    [tasks, selectedDate],
+  );
+  const selectedDayIsEmpty =
+    selectedDayOccurrences.length === 0 && selectedDayTasks.length === 0;
+  const taskPalette = paletteById("amber");
   const allTags = useMemo(() => collectTags(events), [events]);
   const visibleOccurrences =
     view !== "month"
@@ -283,6 +316,18 @@ function CalendarHomePage() {
       : expandedOccurrences.filter((occ) =>
           isSameMonth(occ.occurrenceStart, currentDate),
         );
+  const visibleTasks = useMemo(() => {
+    const dated = (tasks ?? []).filter((task) => task.dueAt);
+    return view !== "month"
+      ? dated.filter((task) =>
+          calendarDays.some((day) =>
+            isSameDay(new Date(task.dueAt as string), day),
+          ),
+        )
+      : dated.filter((task) =>
+          isSameMonth(new Date(task.dueAt as string), currentDate),
+        );
+  }, [tasks, view, calendarDays, currentDate]);
   const visibleCompletions = new Set(
     habitCompletions
       .filter((completion) => {
@@ -393,8 +438,8 @@ function CalendarHomePage() {
                 {calendarTitle}
               </h1>
               <span className="text-[11px] font-medium uppercase text-[#98a2b3]">
-                {visibleOccurrences.length} events · {visibleCompletions}/
-                {visibleHabitOpportunities} kept
+                {visibleOccurrences.length} events · {visibleTasks.length} tasks
+                · {visibleCompletions}/{visibleHabitOpportunities} kept
               </span>
             </div>
 
@@ -484,6 +529,8 @@ function CalendarHomePage() {
                   const dayOccurrences = expandedOccurrences.filter((occ) =>
                     isSameDay(occ.occurrenceStart, day),
                   );
+                  const dayTasks = tasksDueOn(tasks, day);
+                  const dayItemCount = dayOccurrences.length + dayTasks.length;
                   const dayKey = format(day, "yyyy-MM-dd");
                   const completedHabitIds = new Set(
                     habitCompletions
@@ -590,9 +637,46 @@ function CalendarHomePage() {
                             </button>
                           );
                         })}
-                        {dayOccurrences.length > eventLimit && (
+                        {dayTasks
+                          .slice(0, Math.max(0, eventLimit - dayOccurrences.length))
+                          .map((task) => {
+                            const done = isTaskComplete(task);
+                            return (
+                              <button
+                                type="button"
+                                key={`task-${task.id}`}
+                                title={`${task.title} · ${completedItemCount(task)}/${task.items.length} done`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedDate(day);
+                                }}
+                                onDoubleClick={(e) => e.stopPropagation()}
+                                className={cn(
+                                  "block w-full rounded-[3px] px-1.5 py-[2px] text-left text-[10px] leading-[13px] transition-opacity hover:opacity-75",
+                                  taskPalette.chip,
+                                  view !== "month" &&
+                                    "rounded-md px-2.5 py-2 text-[12px] leading-4",
+                                )}
+                              >
+                                <span
+                                  className={cn(
+                                    "block truncate",
+                                    done && "line-through opacity-70",
+                                  )}
+                                >
+                                  <Check className="mr-0.5 inline h-2.5 w-2.5 opacity-60" />
+                                  {task.title}
+                                  <span className="opacity-70">
+                                    {" "}
+                                    · {completedItemCount(task)}/{task.items.length}
+                                  </span>
+                                </span>
+                              </button>
+                            );
+                          })}
+                        {dayItemCount > eventLimit && (
                           <span className="block px-1 text-[9px] text-[#98a2b3]">
-                            +{dayOccurrences.length - eventLimit} more
+                            +{dayItemCount - eventLimit} more
                           </span>
                         )}
                       </div>
@@ -682,7 +766,7 @@ function CalendarHomePage() {
                   </button>
                 </div>
 
-                {selectedDayOccurrences.length === 0 ? (
+                {selectedDayIsEmpty ? (
                   <p className="rounded-md border border-dashed border-[#e3e5e9] px-3 py-3 text-[10px] leading-4 text-[#98a2b3]">
                     Nothing scheduled. Click a day, then add an event — or
                     double-click any date on the grid.
@@ -752,6 +836,81 @@ function CalendarHomePage() {
                             )}
                           </span>
                         </button>
+                      );
+                    })}
+
+                    {selectedDayTasks.map((task) => {
+                      const done = isTaskComplete(task);
+                      const doneCount = completedItemCount(task);
+                      return (
+                        <div
+                          key={`task-${task.id}`}
+                          className="rounded-md px-1.5 py-1.5"
+                        >
+                          <div className="flex items-start gap-2">
+                            <span className="w-9 shrink-0 pt-px text-right text-[10px] font-medium tabular-nums text-[#98a2b3]">
+                              {format(new Date(task.dueAt as string), "HH:mm")}
+                            </span>
+                            <span
+                              className={cn(
+                                "mt-1 h-2 w-2 shrink-0 rounded-full",
+                                taskPalette.dot,
+                              )}
+                            />
+                            <span className="min-w-0 flex-1">
+                              <span
+                                className={cn(
+                                  "block truncate text-[11px] font-medium leading-4 text-[#30333a]",
+                                  done &&
+                                    "text-[#9299a5] line-through decoration-[#b9bec7]",
+                                )}
+                              >
+                                {task.title}
+                              </span>
+                              <span className="mt-0.5 block text-[9px] uppercase tracking-wide text-[#98a2b3]">
+                                task · {doneCount}/{task.items.length} done
+                              </span>
+                            </span>
+                          </div>
+                          <div className="mt-1 space-y-1 pl-[46px]">
+                            {task.items.map((item) => (
+                              <button
+                                type="button"
+                                key={item.id}
+                                disabled={toggleTaskItemMutation.isPending}
+                                onClick={() =>
+                                  toggleTaskItemMutation.mutate({
+                                    taskId: task.id,
+                                    itemId: item.id,
+                                  })
+                                }
+                                aria-pressed={item.completed}
+                                className="group flex w-full items-start gap-2 text-left disabled:cursor-wait disabled:opacity-60"
+                              >
+                                <span
+                                  className={cn(
+                                    "mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border border-[#cfd4dc] bg-white text-white",
+                                    item.completed &&
+                                      "border-[#202124] bg-[#202124]",
+                                  )}
+                                >
+                                  {item.completed && (
+                                    <Check className="h-2 w-2" />
+                                  )}
+                                </span>
+                                <span
+                                  className={cn(
+                                    "min-w-0 flex-1 truncate text-[10px] leading-4 text-[#5c636e]",
+                                    item.completed &&
+                                      "text-[#9299a5] line-through decoration-[#b9bec7]",
+                                  )}
+                                >
+                                  {item.label}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                       );
                     })}
                   </div>

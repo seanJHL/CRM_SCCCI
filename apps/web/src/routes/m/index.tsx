@@ -21,6 +21,7 @@ import {
 import { api } from "@/lib/api";
 import { queryKeys, type Event, type Habit, type HabitCompletion, type StreaksData, type Task } from "@/lib/query-keys";
 import { expandEvents, isOccurrenceComplete, type EventOccurrence } from "@/lib/recurrence";
+import { isTaskComplete } from "@/lib/tasks";
 import { scheduleItemKind, SCHEDULE_ITEM_META } from "@/lib/event-meta";
 import { MobileErrorState } from "@/components/mobile/error-state";
 import { InstallPrompt } from "@/components/mobile/install-prompt";
@@ -35,10 +36,6 @@ export const Route = createFileRoute("/m/")({
 type QueueItem =
   | { kind: "event"; occurrence: EventOccurrence }
   | { kind: "task"; task: Task };
-
-function isTaskComplete(task: Task) {
-  return task.items.length > 0 && task.items.every((item) => item.completed);
-}
 
 function isQueueItemComplete(item: QueueItem) {
   return item.kind === "event" ? isOccurrenceComplete(item.occurrence) : isTaskComplete(item.task);
@@ -187,14 +184,14 @@ function MobileHome() {
     mutationFn: ({ taskId, itemId }: { taskId: string; itemId: string }) =>
       api.post(`/api/tasks/${taskId}/items/${itemId}/toggle`, {}),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
     },
   });
 
   const deleteTaskMutation = useMutation({
     mutationFn: (taskId: string) => api.delete(`/api/tasks/${taskId}`),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
     },
   });
 

@@ -25,6 +25,7 @@ export const queryKeys = {
     search: (q: string) => ["exercises", "search", q] as const,
   },
   tasks: {
+    all: ["tasks"] as const,
     range: (from: string, to: string) => ["tasks", from, to] as const,
   },
   habits: {

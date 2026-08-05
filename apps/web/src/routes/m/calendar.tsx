@@ -5,16 +5,19 @@ import { addDays, format, startOfWeek, startOfDay, endOfDay, isSameDay } from "d
 import {
   CalendarDays,
   Check,
+  ChevronDown,
   Circle,
   Plus,
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import { queryKeys, type Event } from "@/lib/query-keys";
+import { queryKeys, type Event, type Task } from "@/lib/query-keys";
 import { expandEvents, isOccurrenceComplete } from "@/lib/recurrence";
+import { completedItemCount, isTaskComplete, tasksDueOn } from "@/lib/tasks";
 import {
   eventPalette,
+  paletteById,
   scheduleItemKind,
   SCHEDULE_ITEM_META,
 } from "@/lib/event-meta";
@@ -36,6 +39,9 @@ function MobileCalendar() {
 
   const [selected, setSelected] = useState(() => startOfDay(new Date()));
   const [weekAnchor, setWeekAnchor] = useState(() => startOfDay(new Date()));
+  const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const now = new Date();
 
   useEffect(() => {
@@ -75,6 +81,20 @@ function MobileCalendar() {
     refetchInterval: 30_000,
   });
 
+  // Tasks live in their own table, so the calendar has to ask for them
+  // separately or dated tasks never appear on the day they are due.
+  const { data: tasks } = useQuery({
+    queryKey: queryKeys.tasks.range(fromStr, toStr),
+    queryFn: () =>
+      api.get<Task[]>(
+        `/api/tasks?from=${weekStart.toISOString()}&to=${weekEnd.toISOString()}`,
+      ),
+    staleTime: 15_000,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+    refetchInterval: 30_000,
+  });
+
   const toggleCompletionMutation = useMutation({
     mutationFn: ({ eventId, occurrenceStart }: { eventId: string; occurrenceStart: string }) =>
       api.post(`/api/events/${eventId}/completions/toggle`, {
@@ -82,6 +102,14 @@ function MobileCalendar() {
       }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.events.all });
+    },
+  });
+
+  const toggleTaskItemMutation = useMutation({
+    mutationFn: ({ taskId, itemId }: { taskId: string; itemId: string }) =>
+      api.post(`/api/tasks/${taskId}/items/${itemId}/toggle`, {}),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
     },
   });
 
@@ -99,6 +127,21 @@ function MobileCalendar() {
       ),
     [weekOccurrences, selected.getTime()],
   );
+
+  const dayTasks = useMemo(
+    () => tasksDueOn(tasks, selected),
+    [tasks, selected.getTime()],
+  );
+  const dayItemCount = dayOccurrences.length + dayTasks.length;
+
+  const toggleTaskExpanded = (taskId: string) => {
+    setExpandedTaskIds((current) => {
+      const next = new Set(current);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  };
 
   return (
     <div className="m-controller-page flex flex-col gap-4">
@@ -176,11 +219,12 @@ function MobileCalendar() {
           {weekDays.map((day) => {
             const active = isSameDay(day, selected);
             const isToday = isSameDay(day, now);
-            const hasEvents = weekOccurrences.some(
-              (occurrence) =>
-                occurrence.occurrenceStart.getTime() <= endOfDay(day).getTime() &&
-                occurrence.occurrenceEnd.getTime() >= startOfDay(day).getTime(),
-            );
+            const hasItems =
+              weekOccurrences.some(
+                (occurrence) =>
+                  occurrence.occurrenceStart.getTime() <= endOfDay(day).getTime() &&
+                  occurrence.occurrenceEnd.getTime() >= startOfDay(day).getTime(),
+              ) || tasksDueOn(tasks, day).length > 0;
             return (
               <button
                 key={day.toISOString()}
@@ -208,7 +252,7 @@ function MobileCalendar() {
                 <span
                   className={cn(
                     "h-1 w-1 rounded-full",
-                    hasEvents
+                    hasItems
                       ? active
                         ? "bg-[var(--m-primary-fg)]"
                         : "bg-[var(--m-text)]"
@@ -239,9 +283,9 @@ function MobileCalendar() {
             </div>
           </div>
           <span className="rounded-full border border-[var(--m-border)] bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold text-[var(--m-text-3)]">
-            {dayOccurrences.length === 0
+            {dayItemCount === 0
               ? "Open"
-              : `${dayOccurrences.length} ${dayOccurrences.length === 1 ? "item" : "items"}`}
+              : `${dayItemCount} ${dayItemCount === 1 ? "item" : "items"}`}
           </span>
         </div>
         {isLoading ? (
@@ -249,7 +293,7 @@ function MobileCalendar() {
             <div className="m-skeleton h-16 rounded-xl" />
             <div className="m-skeleton h-16 rounded-xl" />
           </div>
-        ) : dayOccurrences.length === 0 ? (
+        ) : dayItemCount === 0 ? (
           <div className="m-calendar-empty">
             <CalendarDays width={24} height={24} className="text-[var(--m-text-3)]" />
             <p className="mt-3 text-[14px] font-semibold text-[var(--m-text)]">No items</p>
@@ -349,6 +393,132 @@ function MobileCalendar() {
                       <Circle width={15} height={15} strokeWidth={2} />
                     )}
                   </button>
+                </div>
+              );
+            })}
+
+            {dayTasks.map((task) => {
+              const dueAt = new Date(task.dueAt as string);
+              const completed = isTaskComplete(task);
+              const doneCount = completedItemCount(task);
+              const expanded = expandedTaskIds.has(task.id);
+              const overdue = !completed && dueAt.getTime() < now.getTime();
+              const palette = paletteById("amber");
+
+              return (
+                <div
+                  key={`task-${task.id}`}
+                  className={cn(
+                    "m-calendar-event-row items-start",
+                    completed && "opacity-50",
+                  )}
+                >
+                  <span className="w-11 shrink-0 pt-3 text-right text-[11px] font-medium tabular-nums text-[var(--m-text-3)]">
+                    {format(dueAt, "h:mm")}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <button
+                      type="button"
+                      onClick={() => toggleTaskExpanded(task.id)}
+                      aria-expanded={expanded}
+                      className="m-press flex w-full min-w-0 gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-white/[0.04]"
+                    >
+                      <span
+                        className="m-calendar-event-accent"
+                        style={{ backgroundColor: palette.hex }}
+                        aria-hidden="true"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span
+                          className={cn(
+                            "block truncate text-[14px] font-semibold text-[var(--m-text)]",
+                            completed && "line-through",
+                          )}
+                        >
+                          {task.title}
+                        </span>
+                        <span className="mt-1 block text-[11px] text-[var(--m-text-3)]">
+                          {SCHEDULE_ITEM_META.task.label} ·{" "}
+                          {completed
+                            ? "Done"
+                            : overdue
+                              ? "Overdue"
+                              : `${doneCount}/${task.items.length} done`}
+                        </span>
+                      </span>
+                      <ChevronDown
+                        width={15}
+                        height={15}
+                        aria-hidden="true"
+                        className={cn(
+                          "mt-1 shrink-0 text-[var(--m-text-3)] transition-transform",
+                          expanded && "rotate-180",
+                        )}
+                      />
+                    </button>
+
+                    {expanded && (
+                      <div className="mb-2 ml-3 space-y-1 border-l border-[var(--m-border)] pl-4">
+                        {task.items.map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() =>
+                              toggleTaskItemMutation.mutate({
+                                taskId: task.id,
+                                itemId: item.id,
+                              })
+                            }
+                            disabled={toggleTaskItemMutation.isPending}
+                            aria-pressed={item.completed}
+                            className="m-press flex min-h-9 w-full items-center gap-2 text-left disabled:opacity-40"
+                          >
+                            {item.completed ? (
+                              <Check
+                                width={13}
+                                height={13}
+                                strokeWidth={3}
+                                className="shrink-0 text-[var(--m-text-2)]"
+                              />
+                            ) : (
+                              <Circle
+                                width={13}
+                                height={13}
+                                strokeWidth={2}
+                                className="shrink-0 text-[var(--m-text-3)]"
+                              />
+                            )}
+                            <span
+                              className={cn(
+                                "min-w-0 flex-1 truncate text-[12px] text-[var(--m-text-2)]",
+                                item.completed && "line-through opacity-60",
+                              )}
+                            >
+                              {item.label}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      "mr-1 mt-2 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border",
+                      completed
+                        ? "border-[#c6ff77]/60 bg-[#c6ff77] text-[#111210]"
+                        : "border-[var(--m-border)] text-[var(--m-text-3)]",
+                    )}
+                  >
+                    {completed ? (
+                      <Check width={15} height={15} strokeWidth={3} />
+                    ) : (
+                      <span className="text-[10px] font-bold tabular-nums">
+                        {doneCount}/{task.items.length}
+                      </span>
+                    )}
+                  </span>
                 </div>
               );
             })}
