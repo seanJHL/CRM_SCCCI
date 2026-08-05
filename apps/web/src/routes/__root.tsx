@@ -8,6 +8,7 @@ import {
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { Sidebar } from "@/components/layout/sidebar";
+import { BuiltWithBadge } from "@/components/layout/built-with-badge";
 import "@/styles/globals.css";
 
 interface RouterContext {
@@ -277,6 +278,7 @@ function RootComponent() {
               </div>
             </>
           )}
+          <BuiltWithBadge />
         </QueryClientProvider>
         <Scripts />
       </body>
