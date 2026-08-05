@@ -1,14 +1,16 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { addDays, format } from "date-fns";
 import {
   Activity,
   CalendarDays,
+  Check,
   CheckSquare2,
   ChevronDown,
   Clock3,
   Plus,
   Repeat,
+  Search,
   Trash2,
   X,
 } from "lucide-react";
@@ -46,9 +48,9 @@ const CAPTURE_TYPES = [
   {
     id: "activity",
     label: "Activity",
-    description: "Add exercise",
+    description: "Schedule one",
     icon: Activity,
-    placeholder: "e.g. Evening walk",
+    placeholder: "e.g. Bench Press",
   },
   {
     id: "task",
@@ -79,6 +81,18 @@ function recurrenceExpiry(date: string) {
   return format(addDays(new Date(`${date}T12:00:00`), 30), "yyyy-MM-dd");
 }
 
+/**
+ * The library is shared, so a name that already exists is not a failure —
+ * the 409 carries the existing row so the activity can reuse it.
+ */
+function existingExerciseFromError(error: unknown): Exercise | null {
+  if (!(error instanceof ApiClientError) || error.code !== "EXERCISE_EXISTS") {
+    return null;
+  }
+  const details = error.details as { exercise?: Exercise } | undefined;
+  return details?.exercise ?? null;
+}
+
 function defaultSchedule() {
   const date = new Date();
   const minutes = date.getMinutes();
@@ -106,7 +120,11 @@ export function QuickActionSheet({
     recurrenceExpiry(defaultSchedule().date),
   );
 
-  // Activity: adds straight to the Train tab's exercise library.
+  // Activity: pick an exercise from the library — or name a new one — and put
+  // it on the calendar at the chosen time.
+  const [activityExerciseId, setActivityExerciseId] = useState<string | null>(
+    null,
+  );
   const [exerciseTrackingType, setExerciseTrackingType] = useState<"strength" | "run">("strength");
   const [exerciseCategory, setExerciseCategory] = useState("functional");
   const [exerciseEquipment, setExerciseEquipment] = useState("other");
@@ -135,21 +153,71 @@ export function QuickActionSheet({
     },
   });
 
-  const createExerciseMutation = useMutation({
-    mutationFn: (payload: Record<string, unknown>) =>
-      api.post<Exercise>("/api/exercises", payload),
-    onSuccess: async (exercise) => {
-      queryClient.setQueryData<Exercise[]>(
-        queryKeys.exercises.all,
-        (current = []) =>
-          [...current.filter((item) => item.id !== exercise.id), exercise].sort(
-            (a, b) => a.name.localeCompare(b.name),
-          ),
-      );
-      await queryClient.invalidateQueries({ queryKey: queryKeys.exercises.all });
+  const { data: exerciseLibrary } = useQuery({
+    queryKey: queryKeys.exercises.all,
+    queryFn: () => api.get<Exercise[]>("/api/exercises"),
+    staleTime: 300_000,
+    enabled: open,
+  });
+
+  const createActivityMutation = useMutation({
+    mutationFn: async (input: {
+      exerciseId: string | null;
+      name: string;
+      trackingType: "strength" | "run";
+      category: string;
+      equipmentType: string;
+      startAt: string;
+      endAt: string;
+    }) => {
+      let exerciseId = input.exerciseId;
+      let exerciseName = input.name;
+      let addedToLibrary = false;
+
+      if (!exerciseId) {
+        try {
+          const exercise = await api.post<Exercise>("/api/exercises", {
+            name: input.name,
+            trackingType: input.trackingType,
+            category: input.category,
+            equipmentType: input.equipmentType,
+          });
+          exerciseId = exercise.id;
+          exerciseName = exercise.name;
+          addedToLibrary = true;
+        } catch (error) {
+          const existing = existingExerciseFromError(error);
+          if (!existing) throw error;
+          exerciseId = existing.id;
+          exerciseName = existing.name;
+        }
+      }
+
+      await api.post<Event>("/api/events", {
+        title: exerciseName,
+        startAt: input.startAt,
+        endAt: input.endAt,
+        category: "personal",
+        // Kept as a tag so the calendar can label it an Activity rather than
+        // a plain event — see scheduleItemKind().
+        tags: "activity",
+        recurrenceRule: "",
+        recurrenceExpiryAt: "",
+        exercises: [{ exerciseId }],
+      });
+
+      return { exerciseName, addedToLibrary };
+    },
+    onSuccess: async ({ exerciseName, addedToLibrary }) => {
+      if (addedToLibrary) {
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.exercises.all,
+        });
+      }
+      await queryClient.invalidateQueries({ queryKey: queryKeys.events.all });
       notify({
-        title: "Exercise added",
-        body: `${exercise.name} is ready in Train.`,
+        title: "Activity scheduled",
+        body: `${exerciseName} is on your calendar.`,
       });
       onClose();
     },
@@ -169,13 +237,36 @@ export function QuickActionSheet({
   });
 
   const activeMutation =
-    kind === "activity" ? createExerciseMutation : kind === "task" ? createTaskMutation : createEventMutation;
+    kind === "activity" ? createActivityMutation : kind === "task" ? createTaskMutation : createEventMutation;
 
   const resetAllMutations = () => {
     createEventMutation.reset();
-    createExerciseMutation.reset();
+    createActivityMutation.reset();
     createTaskMutation.reset();
   };
+
+  const activityQuery = title.trim().toLowerCase();
+  const activityMatches = useMemo(() => {
+    const library = exerciseLibrary ?? [];
+    if (!activityQuery) return library.slice(0, 6);
+    return library
+      .filter(
+        (exercise) =>
+          exercise.name.toLowerCase().includes(activityQuery) ||
+          exercise.category.toLowerCase().includes(activityQuery),
+      )
+      .slice(0, 6);
+  }, [exerciseLibrary, activityQuery]);
+  const activityExactMatch = useMemo(
+    () =>
+      (exerciseLibrary ?? []).find(
+        (exercise) => exercise.name.toLowerCase() === activityQuery,
+      ) ?? null,
+    [exerciseLibrary, activityQuery],
+  );
+  // Only a brand-new name needs the category/equipment fields; picking an
+  // existing exercise carries its own.
+  const activityIsNew = !activityExerciseId && !activityExactMatch;
 
   useEffect(() => {
     if (!open) return;
@@ -191,6 +282,7 @@ export function QuickActionSheet({
     setRecurrenceExpiryAt(
       recurrenceExpiry(request?.date ?? nextSchedule.date),
     );
+    setActivityExerciseId(null);
     setExerciseTrackingType("strength");
     setExerciseCategory("functional");
     setExerciseEquipment("other");
@@ -200,7 +292,13 @@ export function QuickActionSheet({
 
   const selectKind = (nextKind: CaptureKind) => {
     resetAllMutations();
+    setActivityExerciseId(null);
     setKind(nextKind);
+  };
+
+  const selectActivityExercise = (exercise: Exercise) => {
+    setActivityExerciseId(exercise.id);
+    setTitle(exercise.name);
   };
 
   const scheduleShortcut = (shortcut: "now" | "later" | "tomorrow") => {
@@ -259,11 +357,16 @@ export function QuickActionSheet({
     if (!canSubmit) return;
 
     if (kind === "activity") {
-      createExerciseMutation.mutate({
+      const start = new Date(`${date}T${time}:00`);
+      if (Number.isNaN(start.getTime())) return;
+      createActivityMutation.mutate({
+        exerciseId: activityExerciseId ?? activityExactMatch?.id ?? null,
         name: title.trim(),
         trackingType: exerciseTrackingType,
         category: exerciseCategory,
         equipmentType: exerciseEquipment,
+        startAt: start.toISOString(),
+        endAt: new Date(start.getTime() + duration * 60_000).toISOString(),
       });
       return;
     }
@@ -296,14 +399,10 @@ export function QuickActionSheet({
     });
   };
 
-  const exerciseDuplicateName =
-    createExerciseMutation.error instanceof ApiClientError &&
-    createExerciseMutation.error.code === "EXERCISE_EXISTS";
-
   const submitLabel = activeMutation.isPending
     ? "Adding…"
     : kind === "activity"
-      ? "Add to Train"
+      ? "Add activity to calendar"
       : kind === "task"
         ? "Add task"
         : "Add event to calendar";
@@ -395,20 +494,104 @@ export function QuickActionSheet({
                 htmlFor="quick-capture-title"
                 className="mb-1.5 block text-[12px] font-semibold text-[var(--m-text)]"
               >
-                {kind === "activity" ? "Exercise name" : "What’s happening?"}
+                {kind === "activity"
+                  ? "Search your exercises"
+                  : "What’s happening?"}
               </label>
-              <input
-                ref={titleRef}
-                id="quick-capture-title"
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
-                placeholder={activeType.placeholder}
-                autoComplete="off"
-                className="m-field w-full"
-              />
+              <span className="relative block">
+                <input
+                  ref={titleRef}
+                  id="quick-capture-title"
+                  value={title}
+                  onChange={(event) => {
+                    setTitle(event.target.value);
+                    setActivityExerciseId(null);
+                  }}
+                  placeholder={activeType.placeholder}
+                  autoComplete="off"
+                  className={cn("m-field w-full", kind === "activity" && "pl-9")}
+                />
+                {kind === "activity" && (
+                  <Search
+                    width={15}
+                    height={15}
+                    aria-hidden="true"
+                    className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--m-text-3)]"
+                  />
+                )}
+              </span>
             </div>
 
             {kind === "activity" && (
+              <>
+                <div
+                  className="mt-2 overflow-hidden rounded-2xl border border-[var(--m-border)] bg-[var(--m-surface-2)]"
+                  role="listbox"
+                  aria-label="Your exercises"
+                >
+                  {activityMatches.length === 0 && !title.trim() && (
+                    <p className="px-3 py-3 text-[12px] text-[var(--m-text-3)]">
+                      Your library is empty — type a name to create your first
+                      exercise.
+                    </p>
+                  )}
+                  {activityMatches.map((exercise) => {
+                    const selected =
+                      exercise.id === (activityExerciseId ?? activityExactMatch?.id);
+                    return (
+                      <button
+                        key={exercise.id}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        onClick={() => selectActivityExercise(exercise)}
+                        className={cn(
+                          "m-press flex min-h-11 w-full items-center gap-2 border-b border-[var(--m-border)] px-3 py-2 text-left last:border-b-0",
+                          selected && "bg-[var(--m-primary)]/12",
+                        )}
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[13px] font-semibold text-[var(--m-text)]">
+                            {exercise.name}
+                          </span>
+                          <span className="block truncate text-[10px] text-[var(--m-text-3)]">
+                            {EXERCISE_CATEGORIES[
+                              exercise.category as keyof typeof EXERCISE_CATEGORIES
+                            ]?.label ?? exercise.category}
+                            {" · "}
+                            {exercise.trackingType === "run"
+                              ? "Distance & time"
+                              : "Sets & weight"}
+                          </span>
+                        </span>
+                        {selected && (
+                          <Check
+                            width={15}
+                            height={15}
+                            strokeWidth={3}
+                            aria-hidden="true"
+                            className="shrink-0 text-[var(--m-text)]"
+                          />
+                        )}
+                      </button>
+                    );
+                  })}
+                  {activityIsNew && title.trim() && (
+                    <p className="border-t border-[var(--m-border)] px-3 py-2.5 text-[12px] font-semibold text-[var(--m-text-2)]">
+                      <Plus
+                        width={13}
+                        height={13}
+                        aria-hidden="true"
+                        className="mr-1 inline"
+                      />
+                      “{title.trim()}” will be added to your library
+                    </p>
+                  )}
+                </div>
+              </>
+            )}
+
+            {kind === "activity" && activityIsNew && title.trim() && (
               <>
                 <fieldset className="mt-4">
                   <legend className="mb-1.5 text-[12px] font-semibold text-[var(--m-text)]">
@@ -538,7 +721,9 @@ export function QuickActionSheet({
               </>
             )}
 
-            {(kind === "event" || (kind === "task" && hasDueDate)) && (
+            {(kind === "event" ||
+              kind === "activity" ||
+              (kind === "task" && hasDueDate)) && (
               <>
                 <fieldset className="mt-4">
                   <legend className="mb-2 text-[12px] font-semibold text-[var(--m-text)]">
@@ -607,33 +792,33 @@ export function QuickActionSheet({
               </>
             )}
 
+            {(kind === "event" || kind === "activity") && (
+              <label className="m-field-shell mt-2">
+                <span className="flex-1 text-[13px] font-medium text-[var(--m-text-2)]">
+                  Duration
+                </span>
+                <select
+                  value={duration}
+                  onChange={(event) => setDuration(Number(event.target.value))}
+                  className="appearance-none bg-transparent text-right text-[16px] font-semibold text-[var(--m-text)] focus:outline-none"
+                >
+                  {DURATIONS.map((minutes) => (
+                    <option key={minutes} value={minutes}>
+                      {minutes < 60 ? `${minutes} min` : `${minutes / 60} hr`}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown
+                  width={15}
+                  height={15}
+                  aria-hidden="true"
+                  className="text-[var(--m-text-3)]"
+                />
+              </label>
+            )}
+
             {kind === "event" && (
               <>
-                <label className="m-field-shell mt-2">
-                  <span className="flex-1 text-[13px] font-medium text-[var(--m-text-2)]">
-                    Duration
-                  </span>
-                  <select
-                    value={duration}
-                    onChange={(event) => setDuration(Number(event.target.value))}
-                    className="appearance-none bg-transparent text-right text-[16px] font-semibold text-[var(--m-text)] focus:outline-none"
-                  >
-                    {DURATIONS.map((minutes) => (
-                      <option key={minutes} value={minutes}>
-                        {minutes < 60
-                          ? `${minutes} min`
-                          : `${minutes / 60} hr`}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown
-                    width={15}
-                    height={15}
-                    aria-hidden="true"
-                    className="text-[var(--m-text-3)]"
-                  />
-                </label>
-
                 <label className="m-field-shell mt-2">
                   <Repeat
                     width={16}
@@ -695,16 +880,7 @@ export function QuickActionSheet({
               </>
             )}
 
-            {exerciseDuplicateName && (
-              <p
-                className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[12px] leading-snug text-amber-800"
-                role="alert"
-              >
-                An exercise named “{title.trim()}” already exists in your library.
-              </p>
-            )}
-
-            {activeMutation.isError && !exerciseDuplicateName && (
+            {activeMutation.isError && (
               <p
                 className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-[12px] leading-snug text-red-700"
                 role="alert"

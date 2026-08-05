@@ -441,9 +441,11 @@ function MobileCalendar() {
                           {SCHEDULE_ITEM_META.task.label} ·{" "}
                           {completed
                             ? "Done"
-                            : overdue
-                              ? "Overdue"
-                              : `${doneCount}/${task.items.length} done`}
+                            : `${
+                                overdue
+                                  ? "Overdue"
+                                  : `Due ${format(dueAt, "h:mm a")}`
+                              } · ${doneCount}/${task.items.length} done`}
                         </span>
                       </span>
                       <ChevronDown

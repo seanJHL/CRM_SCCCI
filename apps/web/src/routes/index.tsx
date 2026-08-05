@@ -668,7 +668,7 @@ function CalendarHomePage() {
                                   {task.title}
                                   <span className="opacity-70">
                                     {" "}
-                                    · {completedItemCount(task)}/{task.items.length}
+                                    · {format(new Date(task.dueAt as string), "HH:mm")}
                                   </span>
                                 </span>
                               </button>
