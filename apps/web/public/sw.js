@@ -10,7 +10,7 @@
  * This file is served statically from /sw.js and registered by the mobile app.
  */
 
-const CACHE_VERSION = "ember-v4";
+const CACHE_VERSION = "ember-v5";
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const API_CACHE = `${CACHE_VERSION}-api`;
 
